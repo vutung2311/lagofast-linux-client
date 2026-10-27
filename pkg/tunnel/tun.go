@@ -1,0 +1,129 @@
+package tunnel
+
+import (
+	"fmt"
+	"net"
+	"os"
+	"syscall"
+	"unsafe"
+
+	"golang.org/x/sys/unix"
+)
+
+const (
+	DefaultTunName = "lagofast0"
+	DefaultMTU     = 1400
+)
+
+type ifreq struct {
+	Name  [unix.IFNAMSIZ]byte
+	Flags uint16
+	_pad  [22]byte
+}
+
+type Device struct {
+	Name string
+	File *os.File
+	MTU  int
+}
+
+// OpenTun creates and opens a Linux TUN interface
+func OpenTun(name string, mtu int) (*Device, error) {
+	if name == "" {
+		name = DefaultTunName
+	}
+	if mtu <= 0 {
+		mtu = DefaultMTU
+	}
+
+	fd, err := unix.Open("/dev/net/tun", unix.O_RDWR|unix.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open /dev/net/tun: %w", err)
+	}
+
+	var req ifreq
+	copy(req.Name[:], []byte(name))
+	req.Flags = unix.IFF_TUN | unix.IFF_NO_PI
+
+	_, _, errno := unix.Syscall(
+		unix.SYS_IOCTL,
+		uintptr(fd),
+		uintptr(unix.TUNSETIFF),
+		uintptr(unsafe.Pointer(&req)),
+	)
+	if errno != 0 {
+		unix.Close(fd)
+		return nil, fmt.Errorf("ioctl TUNSETIFF failed: %w", errno)
+	}
+
+	actualName := string(bytesTrimRight(req.Name[:]))
+	dev := &Device{
+		Name: actualName,
+		File: os.NewFile(uintptr(fd), actualName),
+		MTU:  mtu,
+	}
+
+	return dev, nil
+}
+
+// SetIP configures the IPv4 address on the TUN interface
+func (d *Device) SetIP(ip net.IP, mask net.IPMask) error {
+	s, err := unix.Socket(unix.AF_INET, unix.SOCK_DGRAM, 0)
+	if err != nil {
+		return err
+	}
+	defer unix.Close(s)
+
+	var req ifreq
+	copy(req.Name[:], []byte(d.Name))
+
+	// Set IP address
+	sa := (*unix.RawSockaddrInet4)(unsafe.Pointer(&req._pad[0]))
+	sa.Family = unix.AF_INET
+	copy(sa.Addr[:], ip.To4())
+
+	_, _, errno := unix.Syscall(
+		unix.SYS_IOCTL,
+		uintptr(s),
+		uintptr(unix.SIOCSIFADDR),
+		uintptr(unsafe.Pointer(&req)),
+	)
+	if errno != 0 && errno != syscall.EEXIST {
+		return fmt.Errorf("ioctl SIOCSIFADDR failed: %w", errno)
+	}
+
+	// Bring interface UP
+	_, _, errno = unix.Syscall(
+		unix.SYS_IOCTL,
+		uintptr(s),
+		uintptr(unix.SIOCGIFFLAGS),
+		uintptr(unsafe.Pointer(&req)),
+	)
+	if errno == 0 {
+		req.Flags |= unix.IFF_UP | unix.IFF_RUNNING
+		unix.Syscall(
+			unix.SYS_IOCTL,
+			uintptr(s),
+			uintptr(unix.SIOCSIFFLAGS),
+			uintptr(unsafe.Pointer(&req)),
+		)
+	}
+
+	return nil
+}
+
+func (d *Device) Close() error {
+	if d.File != nil {
+		return d.File.Close()
+	}
+	return nil
+}
+
+func bytesTrimRight(b []byte) []byte {
+	for i := len(b) - 1; i >= 0; i-- {
+		if b[i] != 0 {
+			return b[:i+1]
+		}
+	}
+	return nil
+}

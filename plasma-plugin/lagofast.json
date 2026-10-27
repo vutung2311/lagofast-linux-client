@@ -1,0 +1,8 @@
+{
+    "KPlugin": {
+        "Description": "LagoFast Gaming Booster VPN Plugin",
+        "Name": "LagoFast",
+        "Version": "1.0"
+    },
+    "X-NetworkManager-Services": "org.freedesktop.NetworkManager.lagofast"
+}

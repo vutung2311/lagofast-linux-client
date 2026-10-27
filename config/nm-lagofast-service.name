@@ -1,0 +1,5 @@
+[VPN Connection]
+name=lagofast
+service=org.freedesktop.NetworkManager.lagofast
+program=/usr/local/bin/nm-lagofast-service
+supports-multiple-connections=false
