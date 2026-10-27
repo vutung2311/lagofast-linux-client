@@ -8,6 +8,8 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -27,6 +29,7 @@ func printUsage() {
 	fmt.Println("  lagofast games [-q <search>]                List supported games")
 	fmt.Println("  lagofast nodes -g <game_id>                 List acceleration nodes for a game")
 	fmt.Println("  lagofast connect -g <game_id> [-n <node>]   Start game acceleration tunnel")
+	fmt.Println("  lagofast run <command> [args...]            Launch game process with traffic bound to lagofast0")
 	fmt.Println("  lagofast status                             Display active session status")
 	fmt.Println("  lagofast logout                             Clear saved credentials")
 	fmt.Println("  lagofast nm-add [-g <game_id>] [-n <name>]  Add/update NetworkManager VPN profile")
@@ -257,6 +260,57 @@ func main() {
 			fmt.Printf("✓ Updated existing NetworkManager connection '%s'.\n", targetName)
 		}
 		fmt.Printf("You can now connect and disconnect from your desktop system tray, or via CLI:\n  nmcli connection up %q\n  nmcli connection down %q\n", targetName, targetName)
+
+	case "run":
+		if len(os.Args) < 3 {
+			fmt.Println("Usage: lagofast run <command> [args...]")
+			fmt.Println("\nAccelerates a specific game process by routing all its network traffic through lagofast0.")
+			fmt.Println("\nExamples:")
+			fmt.Println("  lagofast run wine WhereWindsMeet.exe")
+			fmt.Println("  lagofast run steam steam://rungameid/54758")
+			fmt.Printf("  Steam Launch Options: lagofast run %s\n", "%command%")
+			return
+		}
+
+		// Check if lagofast0 is active
+		_, ifaceErr := net.InterfaceByName("lagofast0")
+		if ifaceErr != nil {
+			fmt.Println("[LagoFast] Notice: 'lagofast0' interface is not active yet.")
+			fmt.Println("           Connect via NetworkManager tray or 'nmcli connection up LagoFast-WWM'.")
+			fmt.Println("           Launching process anyway; traffic will route through booster when active.")
+		}
+
+		targetBin, lookErr := exec.LookPath(os.Args[2])
+		if lookErr != nil {
+			fmt.Printf("Command not found: %s\n", os.Args[2])
+			return
+		}
+
+		bindLib := "/usr/local/lib/liblagofast_bind.so"
+		_, statErr := os.Stat(bindLib)
+		if statErr != nil {
+			abs, absErr := filepath.Abs("./bin/liblagofast_bind.so")
+			if absErr != nil {
+				abs = "./bin/liblagofast_bind.so"
+			}
+			bindLib = abs
+		}
+
+		env := os.Environ()
+		existingPreload := os.Getenv("LD_PRELOAD")
+		if existingPreload != "" {
+			env = append(env, fmt.Sprintf("LD_PRELOAD=%s:%s", bindLib, existingPreload))
+		} else {
+			env = append(env, fmt.Sprintf("LD_PRELOAD=%s", bindLib))
+		}
+		env = append(env, "LAGOFAST_DEVICE=lagofast0")
+
+		args := os.Args[2:]
+		fmt.Printf("[LagoFast] Launching game process with bound tunnel 'lagofast0': %s\n", strings.Join(args, " "))
+		execErr := syscall.Exec(targetBin, args, env)
+		if execErr != nil {
+			fmt.Printf("Failed to execute %s: %v\n", targetBin, execErr)
+		}
 
 	case "nm-install":
 		installNetworkManagerPlugin()

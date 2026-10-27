@@ -4,6 +4,7 @@ all: build
 
 build:
 	mkdir -p bin
+	gcc -shared -fPIC -O2 pkg/bind/bind.c -ldl -o bin/liblagofast_bind.so
 	go build -o bin/lagofast ./cmd/lagofast
 	go build -o bin/nm-lagofast-service ./cmd/nm-lagofast-service
 

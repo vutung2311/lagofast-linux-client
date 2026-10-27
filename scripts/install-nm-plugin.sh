@@ -6,6 +6,8 @@ ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 echo "=== Building LagoFast NetworkManager Plugin ==="
 cd "$ROOT_DIR"
+mkdir -p bin
+gcc -shared -fPIC -O2 pkg/bind/bind.c -ldl -o bin/liblagofast_bind.so
 go build -o bin/nm-lagofast-service ./cmd/nm-lagofast-service
 go build -o bin/lagofast ./cmd/lagofast
 
@@ -33,9 +35,13 @@ pkexec bash -c "
   mkdir -p /etc/NetworkManager/VPN
   mkdir -p /etc/dbus-1/system.d
   mkdir -p /usr/local/bin
+  mkdir -p /usr/local/lib
 
   install -m 755 '$ROOT_DIR/bin/nm-lagofast-service' /usr/local/bin/nm-lagofast-service
   install -m 755 '$ROOT_DIR/bin/lagofast' /usr/local/bin/lagofast
+  if [ -f '$ROOT_DIR/bin/liblagofast_bind.so' ]; then
+    install -m 755 '$ROOT_DIR/bin/liblagofast_bind.so' /usr/local/lib/liblagofast_bind.so
+  fi
   setcap cap_net_admin,cap_net_raw+eip /usr/local/bin/lagofast || true
   setcap cap_net_admin,cap_net_raw+eip '$ROOT_DIR/bin/lagofast' || true
   install -m 644 '$ROOT_DIR/config/nm-lagofast-service.name' /etc/NetworkManager/VPN/nm-lagofast-service.name
