@@ -104,3 +104,18 @@ type RouteConfig struct {
 	Nodes    []NodeItem `json:"nodes"`
 	Routes   []string   `json:"routes"`
 }
+
+type AcctDetailAllResponse struct {
+	AppNo          string                 `json:"app_no"`
+	ClientType     int                    `json:"client_type"`
+	AcctFlag       string                 `json:"acct_flag"`
+	SelectAcctFlag string                 `json:"select_acct_flag"`
+	Auth           AcctAuth               `json:"auth"`
+	CustomConfig   map[string]interface{} `json:"custom_config"`
+}
+
+type AcctAuth struct {
+	MemberID    string `json:"member_id"`
+	AccountName string `json:"account_name"`
+	AccountPwd  string `json:"account_pwd"`
+}

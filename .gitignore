@@ -6,6 +6,7 @@ compat_test/
 extracted_libs/
 mac_extracted/
 decompiled_src/
+win_extracted/
 tools/
 *.zip
 *.apk

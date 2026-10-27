@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"net"
@@ -173,6 +174,7 @@ func main() {
 	case "connect":
 		connCmd := flag.NewFlagSet("connect", flag.ExitOnError)
 		gameID := connCmd.Int("g", 0, "Game ID")
+		zoneIDFlag := connCmd.Int("z", 0, "Zone ID (optional)")
 		nodeIP := connCmd.String("n", "", "Optional custom node IP")
 		tunName := connCmd.String("i", "lagofast0", "TUN interface name")
 		connCmd.Parse(os.Args[2:])
@@ -180,6 +182,58 @@ func main() {
 		if *gameID == 0 {
 			fmt.Println("Error: -g <game_id> is required.")
 			return
+		}
+
+		if session == nil || session.Token == "" {
+			fmt.Println("Error: No active login session found. Please run 'lagofast login' first.")
+			return
+		}
+
+		zoneID := *zoneIDFlag
+		if zoneID == 0 && *gameID == 54758 {
+			zoneID = 45983 // Singapore zone
+		}
+
+		nodePort := 9993
+		if *nodeIP == "" {
+			fmt.Printf("Benchmarking lowest latency relay node for Game ID %d...\n", *gameID)
+			bestNode, rtt, nodeErr := client.SelectOptimalNode(*gameID)
+			if nodeErr != nil {
+				fmt.Printf("Node benchmark warning: %v\n", nodeErr)
+			} else {
+				*nodeIP = bestNode.NodeIP
+				nodePort = bestNode.Port
+				fmt.Printf("Selected optimal node: %s (%s:%d) [RTT: %v]\n", bestNode.NodeName, bestNode.NodeIP, bestNode.Port, rtt)
+			}
+		} else {
+			fmt.Printf("Target relay node: %s\n", *nodeIP)
+		}
+
+		if *nodeIP == "" {
+			*nodeIP = "43.153.212.197"
+		}
+
+		fmt.Printf("Fetching acceleration credentials for Game ID %d, Zone ID %d...\n", *gameID, zoneID)
+		accountName := session.Account
+		plainPwd := "tposwy"
+		zoneFlag := "sg"
+
+		acctDetail, detailErr := client.GetAcctDetailAll(*gameID, zoneID)
+		if detailErr != nil {
+			fmt.Printf("Warning: GetAcctDetailAll failed (%v), using default credentials\n", detailErr)
+		} else {
+			if acctDetail.Auth.AccountName != "" {
+				accountName = acctDetail.Auth.AccountName
+			}
+			if acctDetail.SelectAcctFlag != "" {
+				zoneFlag = acctDetail.SelectAcctFlag
+			}
+			decrypted, decErr := api.DecryptAcctPassword(session.UID, acctDetail.Auth.AccountPwd)
+			if decErr != nil {
+				fmt.Printf("Warning: DecryptAcctPassword failed (%v), fallback to default\n", decErr)
+			} else if decrypted != "" {
+				plainPwd = decrypted
+			}
 		}
 
 		fmt.Printf("Initializing LagoFast tunnel on %s for Game ID %d...\n", *tunName, *gameID)
@@ -190,26 +244,82 @@ func main() {
 		}
 		defer dev.Close()
 
-		localIP := net.ParseIP("10.200.0.2")
+		tunnelConfig := map[string]interface{}{
+			"server": map[string]interface{}{
+				"address": *nodeIP,
+				"port":    nodePort,
+			},
+			"client": map[string]interface{}{
+				"protocol":           "UDP",
+				"group_id":           "320",
+				"login_token":        session.Token,
+				"username":           accountName,
+				"password":           plainPwd,
+				"client_type":        20,
+				"eventId":            12345678,
+				"sn":                 "c7a544b6-7917-488b-b892-06b297b1028b",
+				"mode":               1,
+				"serverid":           zoneID,
+				"product_line": map[string]interface{}{
+					"type":    "lagofast-android",
+					"version": "2.2.0.0",
+				},
+				"select_zone_flag":   zoneFlag,
+				"sessionSize":        0,
+				"enableSpeedCounter": false,
+				"ping_full_link":     false,
+				"enableLwip":         true,
+				"network_way":        "WIFI",
+				"enableFineDivert":   false,
+				"tunId":              *tunName,
+			},
+			"gameinfo": map[string]interface{}{
+				"game_id": *gameID,
+			},
+			"divert": map[string]interface{}{
+				"confVersion": "1.0",
+				"apiVersion":  "1.0",
+				"dns": map[string]interface{}{
+					"defaultOutTag": "direct",
+					"servers": []map[string]interface{}{
+						{"outTag": "direct", "domains": []string{"*"}},
+					},
+				},
+				"routing": map[string]interface{}{
+					"defaultOutTag": "proxy",
+					"rules":         []interface{}{},
+				},
+			},
+			"customProfile": map[string]interface{}{
+				"qyproxy_config": map[string]interface{}{
+					"game_area": zoneFlag,
+				},
+				"qyproxy_game_config": map[string]interface{}{
+					"confuse":            7,
+					"enableProxyModeDNS": true,
+					"enableUdpTunnel":    true,
+					"log_level":          "DEBUG",
+					"nat_open":           false,
+				},
+			},
+		}
+
+		cfgBytes, _ := json.Marshal(tunnelConfig)
+		fmt.Printf("Starting QyProxy tunnel engine...\n")
+		if err := tunnel.DefaultEngine.Start(string(cfgBytes), int(dev.File.Fd())); err != nil {
+			fmt.Printf("Failed to start QyProxy engine: %v\n", err)
+			return
+		}
+		defer tunnel.DefaultEngine.Stop()
+
+		localIP := net.ParseIP("10.10.10.2")
 		mask := net.CIDRMask(24, 32)
 		if err := dev.SetIP(localIP, mask); err != nil {
 			fmt.Printf("Warning: failed to configure IP on %s: %v\n", dev.Name, err)
 		}
 
-		fmt.Printf("TUN interface %s active (IP: 10.200.0.2/24)\n", dev.Name)
-		if *nodeIP == "" {
-			fmt.Printf("Benchmarking lowest latency relay node for Game ID %d...\n", *gameID)
-			bestNode, rtt, nodeErr := client.SelectOptimalNode(*gameID)
-			if nodeErr != nil {
-				fmt.Printf("Node benchmark warning: %v\n", nodeErr)
-			} else {
-				*nodeIP = bestNode.NodeIP
-				fmt.Printf("Selected optimal node: %s (%s:%d) [RTT: %v]\n", bestNode.NodeName, bestNode.NodeIP, bestNode.Port, rtt)
-			}
-		} else {
-			fmt.Printf("Target relay node: %s\n", *nodeIP)
-		}
-		fmt.Println("LagoFast GPN active. Press Ctrl+C to terminate.")
+		fmt.Printf("✓ QyProxy tunnel active on %s (IP: 10.10.10.2/24)\n", dev.Name)
+		fmt.Println("LagoFast GPN connected. Press Ctrl+C to terminate.")
 
 		sig := make(chan os.Signal, 1)
 		signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)

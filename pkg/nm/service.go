@@ -2,6 +2,7 @@ package nm
 
 import (
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net"
@@ -204,6 +205,46 @@ func (s *PluginService) Connect(connection map[string]map[string]dbus.Variant) *
 		log.Printf("[NM-LagoFast] Selected optimal node: %s (%s:%d) [RTT: %v]", bestNode.NodeName, bestNode.NodeIP, bestNode.Port, rtt)
 	}
 
+	zoneID := 0
+	if gameID == 54758 {
+		zoneID = 45983 // Singapore zone
+	}
+	if zoneIDStr, ok := vpnData["zone_id"].Value().(string); ok && zoneIDStr != "" {
+		if zid, err := strconv.Atoi(zoneIDStr); err == nil {
+			zoneID = zid
+		}
+	}
+
+	nodeIP := "43.153.212.197"
+	nodePort := 9993
+	if s.activeNode != nil {
+		nodeIP = s.activeNode.NodeIP
+		nodePort = s.activeNode.Port
+	}
+
+	log.Printf("[NM-LagoFast] Fetching acceleration credentials for Game ID %d, Zone ID %d...", gameID, zoneID)
+	accountName := s.session.Account
+	plainPwd := "tposwy"
+	zoneFlag := "sg"
+
+	acctDetail, detailErr := s.apiClient.GetAcctDetailAll(gameID, zoneID)
+	if detailErr != nil {
+		log.Printf("[NM-LagoFast] Warning: GetAcctDetailAll failed (%v), using default credentials", detailErr)
+	} else {
+		if acctDetail.Auth.AccountName != "" {
+			accountName = acctDetail.Auth.AccountName
+		}
+		if acctDetail.SelectAcctFlag != "" {
+			zoneFlag = acctDetail.SelectAcctFlag
+		}
+		decrypted, decErr := api.DecryptAcctPassword(s.session.UID, acctDetail.Auth.AccountPwd)
+		if decErr != nil {
+			log.Printf("[NM-LagoFast] Warning: DecryptAcctPassword failed (%v), fallback to default", decErr)
+		} else if decrypted != "" {
+			plainPwd = decrypted
+		}
+	}
+
 	// Create TUN interface
 	tunDev, err := tunnel.OpenTun("lagofast0", 1400)
 	if err != nil {
@@ -213,10 +254,81 @@ func (s *PluginService) Connect(connection map[string]map[string]dbus.Variant) *
 	}
 	s.tunDev = tunDev
 
-	// Assign local IP
-	localIP := net.ParseIP("10.200.0.2")
-	gatewayIP := net.ParseIP("10.200.0.1")
-	dnsIP := net.ParseIP("1.1.1.1")
+	// Construct QyProxy tunnel configuration
+	tunnelConfig := map[string]interface{}{
+		"server": map[string]interface{}{
+			"address": nodeIP,
+			"port":    nodePort,
+		},
+		"client": map[string]interface{}{
+			"protocol":           "UDP",
+			"group_id":           "320",
+			"login_token":        s.session.Token,
+			"username":           accountName,
+			"password":           plainPwd,
+			"client_type":        20,
+			"eventId":            12345678,
+			"sn":                 "c7a544b6-7917-488b-b892-06b297b1028b",
+			"mode":               1,
+			"serverid":           zoneID,
+			"product_line": map[string]interface{}{
+				"type":    "lagofast-android",
+				"version": "2.2.0.0",
+			},
+			"select_zone_flag":   zoneFlag,
+			"sessionSize":        0,
+			"enableSpeedCounter": false,
+			"ping_full_link":     false,
+			"enableLwip":         true,
+			"network_way":        "WIFI",
+			"enableFineDivert":   false,
+			"tunId":              "lagofast0",
+		},
+		"gameinfo": map[string]interface{}{
+			"game_id": gameID,
+		},
+		"divert": map[string]interface{}{
+			"confVersion": "1.0",
+			"apiVersion":  "1.0",
+			"dns": map[string]interface{}{
+				"defaultOutTag": "direct",
+				"servers": []map[string]interface{}{
+					{"outTag": "direct", "domains": []string{"*"}},
+				},
+			},
+			"routing": map[string]interface{}{
+				"defaultOutTag": "proxy",
+				"rules":         []interface{}{},
+			},
+		},
+		"customProfile": map[string]interface{}{
+			"qyproxy_config": map[string]interface{}{
+				"game_area": zoneFlag,
+			},
+			"qyproxy_game_config": map[string]interface{}{
+				"confuse":            7,
+				"enableProxyModeDNS": true,
+				"enableUdpTunnel":    true,
+				"log_level":          "DEBUG",
+				"nat_open":           false,
+			},
+		},
+	}
+
+	cfgBytes, _ := json.Marshal(tunnelConfig)
+	log.Printf("[NM-LagoFast] Starting QyProxy tunnel engine on TUN fd %d...", int(tunDev.File.Fd()))
+	if err := tunnel.DefaultEngine.Start(string(cfgBytes), int(tunDev.File.Fd())); err != nil {
+		log.Printf("[NM-LagoFast] Failed to start QyProxy engine: %v", err)
+		s.tunDev.Close()
+		s.tunDev = nil
+		s.emitFailure(ErrorServiceStartFailed)
+		return dbus.NewError("org.freedesktop.NetworkManager.VPN.Error.ServiceStartFailed", []interface{}{err.Error()})
+	}
+
+	// Assign local IP (negotiated with QyProxy gateway)
+	localIP := net.ParseIP("10.10.10.2")
+	gatewayIP := net.ParseIP("10.10.10.1")
+	dnsIP := net.ParseIP("8.8.8.8")
 
 	// Assemble Subnet / CIDR routes for game acceleration
 	var routesList [][]uint32
@@ -266,6 +378,8 @@ func (s *PluginService) Connect(connection map[string]map[string]dbus.Variant) *
 func (s *PluginService) Disconnect() *dbus.Error {
 	log.Printf("[NM-LagoFast] Received Disconnect request")
 	s.setState(StateStopping)
+
+	tunnel.DefaultEngine.Stop()
 
 	if s.tunDev != nil {
 		s.tunDev.Close()

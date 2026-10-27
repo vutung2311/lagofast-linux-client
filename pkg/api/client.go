@@ -2,9 +2,11 @@ package api
 
 import (
 	"bytes"
+	"crypto/aes"
 	"crypto/md5"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -481,4 +483,60 @@ func (c *Client) SelectOptimalNode(gameID int) (*model.NodeItem, time.Duration, 
 	}
 
 	return bestNode, bestRTT, nil
+}
+
+// DecryptAcctPassword decrypts the AES-128-ECB encrypted password returned by acct_detail_all
+func DecryptAcctPassword(uid, encHex string) (string, error) {
+	if encHex == "" {
+		return "", errors.New("empty encrypted password")
+	}
+	ciphertext, err := hex.DecodeString(encHex)
+	if err != nil {
+		return "", fmt.Errorf("invalid hex ciphertext: %w", err)
+	}
+
+	uidMD5 := md5.Sum([]byte(uid))
+	keyHex := hex.EncodeToString(uidMD5[:])
+	if len(keyHex) < 16 {
+		return "", errors.New("invalid key length")
+	}
+	key := []byte(keyHex[:16])
+
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return "", fmt.Errorf("failed to create cipher: %w", err)
+	}
+	if len(ciphertext)%aes.BlockSize != 0 {
+		return "", errors.New("ciphertext is not a multiple of the block size")
+	}
+
+	plaintext := make([]byte, len(ciphertext))
+	for bs, be := 0, aes.BlockSize; bs < len(ciphertext); bs, be = bs+aes.BlockSize, be+aes.BlockSize {
+		block.Decrypt(plaintext[bs:be], ciphertext[bs:be])
+	}
+
+	// Trim trailing null bytes and unprintable padding
+	clean := bytes.TrimRight(plaintext, "\x00")
+	return string(clean), nil
+}
+
+// GetAcctDetailAll retrieves acceleration credentials and parameters for a specific game and zone
+func (c *Client) GetAcctDetailAll(gameID, zoneID int) (*model.AcctDetailAllResponse, error) {
+	q := url.Values{}
+	q.Set("app_no", fmt.Sprintf("%d", gameID))
+	q.Set("accelerate_object_no", fmt.Sprintf("%d", zoneID))
+	q.Set("client_type", "20")
+	q.Set("crypto_method", "AES-ECB")
+
+	respBytes, err := c.doRequest(http.MethodGet, "/api/accelerate_bff/v1/mobile/acct_object/acct_detail_all", q, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch acct_detail_all: %w", err)
+	}
+
+	var detail model.AcctDetailAllResponse
+	if err := json.Unmarshal(respBytes, &detail); err != nil {
+		return nil, fmt.Errorf("failed to parse acct_detail_all response: %w", err)
+	}
+
+	return &detail, nil
 }

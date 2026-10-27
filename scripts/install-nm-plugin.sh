@@ -8,6 +8,7 @@ echo "=== Building LagoFast NetworkManager Plugin ==="
 cd "$ROOT_DIR"
 mkdir -p bin
 gcc -shared -fPIC -O2 pkg/bind/bind.c -ldl -o bin/liblagofast_bind.so
+gcc -shared -fPIC -O2 native/liblog/liblog_stub.c -ldl -lpthread -o bin/liblog.so
 go build -o bin/nm-lagofast-service ./cmd/nm-lagofast-service
 go build -o bin/lagofast ./cmd/lagofast
 
@@ -41,6 +42,16 @@ pkexec bash -c "
   install -m 755 '$ROOT_DIR/bin/lagofast' /usr/local/bin/lagofast
   if [ -f '$ROOT_DIR/bin/liblagofast_bind.so' ]; then
     install -m 755 '$ROOT_DIR/bin/liblagofast_bind.so' /usr/local/lib/liblagofast_bind.so
+  fi
+  mkdir -p /usr/local/lib/lagofast
+  if [ -f '$ROOT_DIR/bin/liblog.so' ]; then
+    install -m 755 '$ROOT_DIR/bin/liblog.so' /usr/local/lib/lagofast/liblog.so
+  fi
+  if [ -f '$ROOT_DIR/extracted_libs/libproxy.so' ]; then
+    install -m 755 '$ROOT_DIR/extracted_libs/libproxy.so' /usr/local/lib/lagofast/libproxy.so
+  fi
+  if [ -f '$ROOT_DIR/extracted_libs/libqyproxy-lib.so' ]; then
+    install -m 755 '$ROOT_DIR/extracted_libs/libqyproxy-lib.so' /usr/local/lib/lagofast/libqyproxy-lib.so
   fi
   setcap cap_net_admin,cap_net_raw+eip /usr/local/bin/lagofast || true
   setcap cap_net_admin,cap_net_raw+eip '$ROOT_DIR/bin/lagofast' || true

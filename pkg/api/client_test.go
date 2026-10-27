@@ -49,6 +49,22 @@ func TestPingNode_Live(t *testing.T) {
 	t.Logf("Successfully probed live node (RTT: %v)", rtt)
 }
 
+func TestDecryptAcctPassword(t *testing.T) {
+	uid := "20261021200403000000000001114692"
+	encHex := "c2f062e436acced215ed3b6ec893b55a"
+	expected := "tposwy"
+
+	decrypted, err := DecryptAcctPassword(uid, encHex)
+	if err != nil {
+		t.Fatalf("DecryptAcctPassword failed: %v", err)
+	}
+
+	if decrypted != expected {
+		t.Fatalf("Expected decrypted password %q, got %q", expected, decrypted)
+	}
+	t.Logf("Successfully decrypted password: %s", decrypted)
+}
+
 func TestHashPassword(t *testing.T) {
 	hashed := HashPassword("test_password_123")
 	expected := "394993518c8c06d577150f228d617a75"
