@@ -197,7 +197,16 @@ func main() {
 		}
 
 		fmt.Printf("TUN interface %s active (IP: 10.200.0.2/24)\n", dev.Name)
-		if *nodeIP != "" {
+		if *nodeIP == "" {
+			fmt.Printf("Benchmarking lowest latency relay node for Game ID %d...\n", *gameID)
+			bestNode, rtt, nodeErr := client.SelectOptimalNode(*gameID)
+			if nodeErr != nil {
+				fmt.Printf("Node benchmark warning: %v\n", nodeErr)
+			} else {
+				*nodeIP = bestNode.NodeIP
+				fmt.Printf("Selected optimal node: %s (%s:%d) [RTT: %v]\n", bestNode.NodeName, bestNode.NodeIP, bestNode.Port, rtt)
+			}
+		} else {
 			fmt.Printf("Target relay node: %s\n", *nodeIP)
 		}
 		fmt.Println("LagoFast GPN active. Press Ctrl+C to terminate.")
@@ -242,22 +251,23 @@ func main() {
 
 		fmt.Printf("Configuring NetworkManager connection '%s' (Game ID: %d)...\n", targetName, *gameID)
 		vpnData := fmt.Sprintf("game_id=%d", *gameID)
+		gameRoutes := "43.245.0.0/16, 119.28.0.0/16, 150.109.0.0/16, 129.226.0.0/16, 101.32.0.0/16, 47.242.0.0/16, 47.238.0.0/16, 47.76.0.0/16, 14.0.45.0/24, 8.216.0.0/16, 163.171.0.0/16"
 
 		checkCmd := exec.Command("nmcli", "connection", "show", targetName)
 		if err := checkCmd.Run(); err != nil {
-			addCmd := exec.Command("nmcli", "connection", "add", "type", "vpn", "vpn-type", "lagofast", "con-name", targetName, "vpn.data", vpnData, "ipv4.never-default", "yes", "connection.autoconnect", "no")
+			addCmd := exec.Command("nmcli", "connection", "add", "type", "vpn", "vpn-type", "lagofast", "con-name", targetName, "vpn.data", vpnData, "ipv4.never-default", "yes", "ipv4.routes", gameRoutes, "connection.autoconnect", "no")
 			if err := addCmd.Run(); err != nil {
 				fmt.Printf("Failed to add connection: %v\n", err)
 				return
 			}
-			fmt.Printf("✓ Successfully created connection '%s' in NetworkManager.\n", targetName)
+			fmt.Printf("✓ Successfully created connection '%s' in NetworkManager with game subnets.\n", targetName)
 		} else {
-			modCmd := exec.Command("nmcli", "connection", "modify", targetName, "vpn.data", vpnData, "ipv4.never-default", "yes", "connection.autoconnect", "no")
+			modCmd := exec.Command("nmcli", "connection", "modify", targetName, "vpn.data", vpnData, "ipv4.never-default", "yes", "ipv4.routes", gameRoutes, "connection.autoconnect", "no")
 			if err := modCmd.Run(); err != nil {
 				fmt.Printf("Failed to update connection: %v\n", err)
 				return
 			}
-			fmt.Printf("✓ Updated existing NetworkManager connection '%s'.\n", targetName)
+			fmt.Printf("✓ Updated existing NetworkManager connection '%s' with game subnets.\n", targetName)
 		}
 		fmt.Printf("You can now connect and disconnect from your desktop system tray, or via CLI:\n  nmcli connection up %q\n  nmcli connection down %q\n", targetName, targetName)
 

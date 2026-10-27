@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 
 	"github.com/godbus/dbus/v5"
@@ -14,6 +15,22 @@ import (
 	"github.com/lagofast/lagofast-vpn/pkg/model"
 	"github.com/lagofast/lagofast-vpn/pkg/tunnel"
 )
+
+var DefaultGameCIDRs = map[int][]string{
+	54758: { // Where Winds Meet (NetEase & Cloud Game Servers)
+		"43.245.0.0/16",  // NetEase Hong Kong / Singapore
+		"119.28.0.0/16",  // Tencent / NetEase SEA Clusters
+		"150.109.0.0/16", // NetEase Singapore Cluster
+		"129.226.0.0/16", // Tencent / NetEase SEA
+		"101.32.0.0/16",  // NetEase SEA Gaming
+		"47.242.0.0/16",  // Alibaba Cloud Singapore
+		"47.238.0.0/16",  // Alibaba Cloud Singapore
+		"47.76.0.0/16",   // Alibaba Cloud Singapore
+		"14.0.45.0/24",   // NetEase Tokyo Cluster
+		"8.216.0.0/16",   // NetEase Japan Cluster
+		"163.171.0.0/16", // NetEase Singapore / Japan
+	},
+}
 
 const (
 	DBusInterface = "org.freedesktop.NetworkManager.VPN.Plugin"
@@ -168,6 +185,25 @@ func (s *PluginService) Connect(connection map[string]map[string]dbus.Variant) *
 
 	s.setState(StateConfiguring)
 
+	gameID := 54758
+	if gameIDStr != "" {
+		parsedID, parseErr := strconv.Atoi(gameIDStr)
+		if parseErr != nil {
+			log.Printf("[NM-LagoFast] Invalid game_id %q, defaulting to %d", gameIDStr, gameID)
+		} else {
+			gameID = parsedID
+		}
+	}
+
+	log.Printf("[NM-LagoFast] Benchmarking lowest latency relay node for Game ID %d...", gameID)
+	bestNode, rtt, nodeErr := s.apiClient.SelectOptimalNode(gameID)
+	if nodeErr != nil {
+		log.Printf("[NM-LagoFast] Node benchmark warning: %v", nodeErr)
+	} else {
+		s.activeNode = bestNode
+		log.Printf("[NM-LagoFast] Selected optimal node: %s (%s:%d) [RTT: %v]", bestNode.NodeName, bestNode.NodeIP, bestNode.Port, rtt)
+	}
+
 	// Create TUN interface
 	tunDev, err := tunnel.OpenTun("lagofast0", 1400)
 	if err != nil {
@@ -182,15 +218,37 @@ func (s *PluginService) Connect(connection map[string]map[string]dbus.Variant) *
 	gatewayIP := net.ParseIP("10.200.0.1")
 	dnsIP := net.ParseIP("1.1.1.1")
 
+	// Assemble Subnet / CIDR routes for game acceleration
+	var routesList [][]uint32
+	cidrs, hasCIDRs := DefaultGameCIDRs[gameID]
+	if !hasCIDRs {
+		cidrs = DefaultGameCIDRs[54758]
+	}
+	for _, cidr := range cidrs {
+		ip, ipnet, err := net.ParseCIDR(cidr)
+		if err != nil {
+			continue
+		}
+		ones, _ := ipnet.Mask.Size()
+		routesList = append(routesList, []uint32{
+			ipToUint32(ip),
+			uint32(ones),
+			ipToUint32(gatewayIP),
+			uint32(50),
+		})
+	}
+
 	ip4Config := map[string]dbus.Variant{
-		"tundev":     dbus.MakeVariant(tunDev.Name),
-		"internal-ip4": dbus.MakeVariant(ipToUint32(localIP)),
-		"external-ip4": dbus.MakeVariant(ipToUint32(gatewayIP)),
-		"address":    dbus.MakeVariant(ipToUint32(localIP)),
-		"prefix":     dbus.MakeVariant(uint32(24)),
-		"gateway":    dbus.MakeVariant(ipToUint32(gatewayIP)),
-		"dns":        dbus.MakeVariant([]uint32{ipToUint32(dnsIP)}),
-		"mtu":        dbus.MakeVariant(uint32(1400)),
+		"tundev":        dbus.MakeVariant(tunDev.Name),
+		"internal-ip4":  dbus.MakeVariant(ipToUint32(localIP)),
+		"external-ip4":  dbus.MakeVariant(ipToUint32(gatewayIP)),
+		"address":       dbus.MakeVariant(ipToUint32(localIP)),
+		"prefix":        dbus.MakeVariant(uint32(24)),
+		"gateway":       dbus.MakeVariant(ipToUint32(gatewayIP)),
+		"dns":           dbus.MakeVariant([]uint32{ipToUint32(dnsIP)}),
+		"mtu":           dbus.MakeVariant(uint32(1400)),
+		"never-default": dbus.MakeVariant(true),
+		"routes":        dbus.MakeVariant(routesList),
 	}
 
 	log.Printf("[NM-LagoFast] Emitting Ip4Config on device %s", tunDev.Name)

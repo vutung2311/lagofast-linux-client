@@ -7,9 +7,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/lagofast/lagofast-vpn/pkg/model"
@@ -383,4 +385,100 @@ func (c *Client) GetGameNodes(gameID int) ([]model.NodeItem, error) {
 	}
 
 	return allNodes, nil
+}
+
+// PingNode measures UDP echo round-trip time to a LagoFast relay node
+func PingNode(ip string, port int, timeout time.Duration) (time.Duration, error) {
+	if port <= 0 {
+		port = 9993
+	}
+	addr := fmt.Sprintf("%s:%d", ip, port)
+	conn, err := net.DialTimeout("udp", addr, timeout)
+	if err != nil {
+		return 0, err
+	}
+	defer conn.Close()
+
+	if err := conn.SetDeadline(time.Now().Add(timeout)); err != nil {
+		return 0, err
+	}
+
+	probe := []byte{0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00}
+	start := time.Now()
+	_, err = conn.Write(probe)
+	if err != nil {
+		return 0, err
+	}
+
+	buf := make([]byte, 64)
+	n, err := conn.Read(buf)
+	if err != nil {
+		return 0, err
+	}
+	if n < 8 {
+		return 0, fmt.Errorf("response too short: %d bytes", n)
+	}
+
+	rtt := time.Since(start)
+	return rtt, nil
+}
+
+// SelectOptimalNode queries all candidate nodes for a game and selects the lowest RTT node via parallel UDP ping
+func (c *Client) SelectOptimalNode(gameID int) (*model.NodeItem, time.Duration, error) {
+	nodes, err := c.GetGameNodes(gameID)
+	if err != nil {
+		return nil, 0, err
+	}
+	if len(nodes) == 0 {
+		return nil, 0, fmt.Errorf("no candidate nodes found for game %d", gameID)
+	}
+
+	type pingResult struct {
+		node model.NodeItem
+		rtt  time.Duration
+		err  error
+	}
+
+	results := make(chan pingResult, len(nodes))
+	var wg sync.WaitGroup
+
+	// Concurrency limiter
+	sem := make(chan struct{}, 20)
+
+	for _, n := range nodes {
+		wg.Add(1)
+		go func(node model.NodeItem) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			rtt, err := PingNode(node.NodeIP, node.Port, 600*time.Millisecond)
+			results <- pingResult{node: node, rtt: rtt, err: err}
+		}(n)
+	}
+
+	wg.Wait()
+	close(results)
+
+	var bestNode *model.NodeItem
+	var bestRTT time.Duration = 999999 * time.Hour
+
+	for res := range results {
+		if res.err != nil {
+			continue
+		}
+		if res.rtt < bestRTT {
+			bestRTT = res.rtt
+			bestNodeCopy := res.node
+			bestNode = &bestNodeCopy
+		}
+	}
+
+	if bestNode == nil {
+		// Fallback to first available node if UDP echo is filtered on all nodes
+		first := nodes[0]
+		return &first, 0, fmt.Errorf("all nodes timed out on UDP ping, falling back to %s (%s)", first.NodeName, first.NodeIP)
+	}
+
+	return bestNode, bestRTT, nil
 }

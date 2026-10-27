@@ -2,6 +2,7 @@ package api
 
 import (
 	"testing"
+	"time"
 )
 
 func TestClient_GetGameList(t *testing.T) {
@@ -32,11 +33,20 @@ func TestClient_GetGameList(t *testing.T) {
 func TestClient_GoogleLogin_RejectionOnInvalidToken(t *testing.T) {
 	client := NewClient("")
 	_, err := client.LoginWithGoogle("invalid_mock_jwt_token")
-	if err == nil {
-		t.Errorf("Expected error with invalid Google token, but got success")
-	} else {
+	if err != nil {
 		t.Logf("Correctly received rejection for invalid token: %v", err)
+		return
 	}
+	t.Errorf("Expected error with invalid Google token, but got success")
+}
+
+func TestPingNode_Live(t *testing.T) {
+	rtt, err := PingNode("8.215.50.23", 9993, 1500*time.Millisecond)
+	if err != nil {
+		t.Logf("Ping live node skipped or timed out: %v", err)
+		return
+	}
+	t.Logf("Successfully probed live node (RTT: %v)", rtt)
 }
 
 func TestHashPassword(t *testing.T) {
