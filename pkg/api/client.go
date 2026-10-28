@@ -513,17 +513,24 @@ func (c *Client) benchmarkNodes(nodes []model.NodeItem) (*model.NodeItem, time.D
 		return nil, 0, fmt.Errorf("no candidate nodes found")
 	}
 
-	type pingResult struct {
-		node model.NodeItem
-		rtt  time.Duration
-		err  error
+	type nodeBenchmark struct {
+		node     model.NodeItem
+		minRTT   time.Duration
+		avgRTT   time.Duration
+		maxRTT   time.Duration
+		jitter   time.Duration
+		lossRate float64
+		score    float64
+		err      error
 	}
 
-	results := make(chan pingResult, len(nodes))
+	results := make(chan nodeBenchmark, len(nodes))
 	var wg sync.WaitGroup
 
-	// Concurrency limiter
-	sem := make(chan struct{}, 20)
+	sem := make(chan struct{}, 15)
+	probeCount := 6
+	probeInterval := 80 * time.Millisecond
+	probeTimeout := 500 * time.Millisecond
 
 	for _, n := range nodes {
 		wg.Add(1)
@@ -532,45 +539,85 @@ func (c *Client) benchmarkNodes(nodes []model.NodeItem) (*model.NodeItem, time.D
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			rtt, err := PingNode(node.NodeIP, node.Port, 600*time.Millisecond)
-			if err != nil {
-				results <- pingResult{node: node, rtt: 0, err: err}
+			var samples []time.Duration
+			for p := 0; p < probeCount; p++ {
+				rtt, err := PingNode(node.NodeIP, node.Port, probeTimeout)
+				if err == nil && rtt > 0 {
+					samples = append(samples, rtt)
+				}
+				if p < probeCount-1 {
+					time.Sleep(probeInterval)
+				}
+			}
+
+			if len(samples) == 0 {
+				results <- nodeBenchmark{node: node, err: fmt.Errorf("all probes failed")}
 				return
 			}
-			tcpConn, tcpErr := net.DialTimeout("tcp", fmt.Sprintf("%s:2080", node.NodeIP), 600*time.Millisecond)
-			if tcpErr != nil {
-				results <- pingResult{node: node, rtt: 0, err: tcpErr}
-				return
+
+			var sum time.Duration
+			minR := samples[0]
+			maxR := samples[0]
+
+			for _, s := range samples {
+				sum += s
+				if s < minR {
+					minR = s
+				}
+				if s > maxR {
+					maxR = s
+				}
 			}
-			tcpConn.Close()
-			results <- pingResult{node: node, rtt: rtt, err: nil}
+
+			avgR := sum / time.Duration(len(samples))
+
+			var jitterSum time.Duration
+			for _, s := range samples {
+				diff := s - avgR
+				if diff < 0 {
+					diff = -diff
+				}
+				jitterSum += diff
+			}
+			jitter := jitterSum / time.Duration(len(samples))
+
+			lossRate := float64(probeCount-len(samples)) / float64(probeCount)
+			score := float64(avgR.Milliseconds()) + 2.5*float64(jitter.Milliseconds()) + (lossRate * 150.0)
+
+			results <- nodeBenchmark{
+				node:     node,
+				minRTT:   minR,
+				avgRTT:   avgR,
+				maxRTT:   maxR,
+				jitter:   jitter,
+				lossRate: lossRate,
+				score:    score,
+			}
 		}(n)
 	}
 
 	wg.Wait()
 	close(results)
 
-	var bestNode *model.NodeItem
-	var bestRTT time.Duration = 999999 * time.Hour
-
+	var validNodes []nodeBenchmark
 	for res := range results {
-		if res.err != nil {
+		if res.err != nil || res.lossRate > 0.4 {
 			continue
 		}
-		if res.rtt < bestRTT {
-			bestRTT = res.rtt
-			bestNodeCopy := res.node
-			bestNode = &bestNodeCopy
-		}
+		validNodes = append(validNodes, res)
 	}
 
-	if bestNode == nil {
-		// Fallback to first available node if UDP echo is filtered on all nodes
+	if len(validNodes) == 0 {
 		first := nodes[0]
-		return &first, 0, fmt.Errorf("all nodes timed out on UDP ping, falling back to %s (%s)", first.NodeName, first.NodeIP)
+		return &first, 0, fmt.Errorf("all nodes failed stability benchmark, falling back to %s (%s)", first.NodeName, first.NodeIP)
 	}
 
-	return bestNode, bestRTT, nil
+	sort.Slice(validNodes, func(i, j int) bool {
+		return validNodes[i].score < validNodes[j].score
+	})
+
+	best := validNodes[0]
+	return &best.node, best.avgRTT, nil
 }
 
 // DecryptAcctPassword decrypts the AES-128-ECB encrypted password returned by acct_detail_all

@@ -229,7 +229,7 @@ func (s *PluginService) Connect(connection map[string]map[string]dbus.Variant) *
 	}
 
 	explicitNodeIP, _ := vpnData["node_ip"].Value().(string)
-	if explicitNodeIP != "" {
+	if explicitNodeIP != "" && explicitNodeIP != "auto" {
 		log.Printf("[NM-LagoFast] Using explicit node IP from settings: %s", explicitNodeIP)
 		s.activeNode = &model.NodeItem{
 			NodeIP:   explicitNodeIP,
@@ -237,7 +237,7 @@ func (s *PluginService) Connect(connection map[string]map[string]dbus.Variant) *
 			NodeName: "Configured-Node",
 		}
 	} else if zoneID > 0 {
-		log.Printf("[NM-LagoFast] Benchmarking lowest latency relay node for Game ID %d, Zone ID %d...", gameID, zoneID)
+		log.Printf("[NM-LagoFast] Running smart multi-probe stability benchmark (Game ID %d, Zone ID %d)...", gameID, zoneID)
 		bestNode, rtt, nodeErr := s.apiClient.SelectOptimalNodeForZone(gameID, zoneID)
 		if nodeErr != nil {
 			log.Printf("[NM-LagoFast] Zone node benchmark warning: %v, falling back to global", nodeErr)
