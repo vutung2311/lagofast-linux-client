@@ -175,6 +175,14 @@ Game combat servers often use specific subnets like `47.84.156.0/24`. If any man
 
 ## 6. Packaging, Build & Deployment
 
+### Native Libraries & Git LFS
+The essential proprietary proxy libraries (`extracted_libs/libproxy.so` and `extracted_libs/libqyproxy-lib.so`) are tracked via **Git LFS**.
+When cloning on a new machine:
+```bash
+git lfs install
+git lfs pull
+```
+
 ### Build Commands
 ```bash
 # Build Go binaries and native shared libraries

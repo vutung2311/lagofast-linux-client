@@ -3,7 +3,6 @@ downloads/
 apks/
 dex/
 compat_test/
-extracted_libs/
 mac_extracted/
 decompiled_src/
 win_extracted/
@@ -20,3 +19,9 @@ plasma-plugin/*.moc
 packaging/arch/src/
 packaging/arch/pkg/
 *.pkg.tar.*
+
+# Allow Git LFS tracking of essential native libraries
+!extracted_libs/
+extracted_libs/*
+!extracted_libs/libproxy.so
+!extracted_libs/libqyproxy-lib.so
