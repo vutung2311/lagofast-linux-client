@@ -72,3 +72,15 @@ func TestHashPassword(t *testing.T) {
 		t.Errorf("Expected %s, got %s", expected, hashed)
 	}
 }
+
+func TestGetGameRoutingSubnets(t *testing.T) {
+	client := NewClient("")
+	subnets, err := client.GetGameRoutingSubnets(54758, 45983)
+	if err != nil {
+		t.Fatalf("GetGameRoutingSubnets failed: %v", err)
+	}
+	if len(subnets) == 0 {
+		t.Errorf("Expected non-empty subnets list, got 0")
+	}
+	t.Logf("Discovered %d subnets dynamically: %v", len(subnets), subnets)
+}

@@ -347,11 +347,25 @@ func (s *PluginService) Connect(connection map[string]map[string]dbus.Variant) *
 
 	// Assemble Subnet / CIDR routes for game acceleration
 	var routesList [][]uint32
-	cidrs, hasCIDRs := DefaultGameCIDRs[gameID]
-	if !hasCIDRs {
-		cidrs = DefaultGameCIDRs[54758]
+	cidrs, err := s.apiClient.GetGameRoutingSubnets(gameID, zoneID)
+	if err != nil {
+		cidrs = nil
 	}
-	for _, cidr := range cidrs {
+	seenCIDRs := make(map[string]bool)
+	var combinedCIDRs []string
+	for _, c := range cidrs {
+		if !seenCIDRs[c] {
+			seenCIDRs[c] = true
+			combinedCIDRs = append(combinedCIDRs, c)
+		}
+	}
+	for _, c := range DefaultGameCIDRs[gameID] {
+		if !seenCIDRs[c] {
+			seenCIDRs[c] = true
+			combinedCIDRs = append(combinedCIDRs, c)
+		}
+	}
+	for _, cidr := range combinedCIDRs {
 		ip, ipnet, err := net.ParseCIDR(cidr)
 		if err != nil {
 			continue

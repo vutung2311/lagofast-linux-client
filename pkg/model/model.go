@@ -107,12 +107,18 @@ type RouteConfig struct {
 }
 
 type AcctDetailAllResponse struct {
-	AppNo          string                 `json:"app_no"`
-	ClientType     int                    `json:"client_type"`
-	AcctFlag       string                 `json:"acct_flag"`
-	SelectAcctFlag string                 `json:"select_acct_flag"`
-	Auth           AcctAuth               `json:"auth"`
-	CustomConfig   map[string]interface{} `json:"custom_config"`
+	AppNo                string                 `json:"app_no"`
+	ClientType           int                    `json:"client_type"`
+	AcctFlag             string                 `json:"acct_flag"`
+	SelectAcctFlag       string                 `json:"select_acct_flag"`
+	Auth                 AcctAuth               `json:"auth"`
+	CustomConfig         map[string]interface{} `json:"custom_config"`
+	DelayDetectPingZones []DelayDetectPingZone  `json:"delay_detect_ping_zones"`
+}
+
+type DelayDetectPingZone struct {
+	Tag         string   `json:"tag"`
+	DetectionIP []string `json:"detection_ip"`
 }
 
 type AcctAuth struct {

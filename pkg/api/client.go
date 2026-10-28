@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -541,4 +542,114 @@ func (c *Client) GetAcctDetailAll(gameID, zoneID int) (*model.AcctDetailAllRespo
 	}
 
 	return &detail, nil
+}
+
+func (c *Client) extractZonePingIPs(gameID, zoneID int, addSubnet func(string)) {
+	detailURL := fmt.Sprintf("/api/common_bll/v2/games/mobile_game_list/%d/detail", gameID)
+	q := url.Values{}
+	q.Set("version", "2.2.0.0")
+	q.Set("client_type", "20")
+	respBytes, err := c.doRequest(http.MethodGet, detailURL, q, nil)
+	if err != nil {
+		return
+	}
+
+	var resp struct {
+		Data struct {
+			ZoneInfo []struct {
+				ID         int         `json:"id"`
+				ZoneID     interface{} `json:"zone_id"`
+				PingIPList []string    `json:"ping_ip_list"`
+				Child      []struct {
+					ID         int         `json:"id"`
+					ZoneID     interface{} `json:"zone_id"`
+					PingIPList []string    `json:"ping_ip_list"`
+				} `json:"child"`
+			} `json:"zone_info"`
+		} `json:"data"`
+	}
+
+	if err := json.Unmarshal(respBytes, &resp); err != nil {
+		return
+	}
+
+	parseZoneID := func(v interface{}, fallbackID int) string {
+		if v == nil {
+			if fallbackID > 0 {
+				return fmt.Sprintf("%d", fallbackID)
+			}
+			return ""
+		}
+		switch val := v.(type) {
+		case string:
+			return val
+		case float64:
+			return fmt.Sprintf("%.0f", val)
+		default:
+			return fmt.Sprintf("%v", val)
+		}
+	}
+
+	targetZoneStr := fmt.Sprintf("%d", zoneID)
+	for _, z := range resp.Data.ZoneInfo {
+		zIDStr := parseZoneID(z.ZoneID, z.ID)
+		if zoneID == 0 || zIDStr == targetZoneStr {
+			for _, ip := range z.PingIPList {
+				addSubnet(ip)
+			}
+		}
+		for _, cz := range z.Child {
+			czIDStr := parseZoneID(cz.ZoneID, cz.ID)
+			if zoneID == 0 || czIDStr == targetZoneStr {
+				for _, ip := range cz.PingIPList {
+					addSubnet(ip)
+				}
+			}
+		}
+	}
+}
+
+// GetGameRoutingSubnets queries REST endpoints to dynamically compute CIDR routing subnets for a game and zone
+func (c *Client) GetGameRoutingSubnets(gameID, zoneID int) ([]string, error) {
+	subnets := make(map[string]bool)
+
+	addSubnet := func(rawIP string) {
+		ip := net.ParseIP(strings.TrimSpace(rawIP))
+		if ip == nil {
+			return
+		}
+		ip4 := ip.To4()
+		if ip4 == nil || ip4.IsLoopback() || ip4.IsPrivate() {
+			return
+		}
+		mask := net.CIDRMask(16, 32)
+		network := ip4.Mask(mask)
+		subnets[fmt.Sprintf("%s/16", network.String())] = true
+	}
+
+	c.extractZonePingIPs(gameID, zoneID, addSubnet)
+
+	acctDetail, err := c.GetAcctDetailAll(gameID, zoneID)
+	if err == nil && acctDetail != nil {
+		for _, pz := range acctDetail.DelayDetectPingZones {
+			for _, ip := range pz.DetectionIP {
+				addSubnet(ip)
+			}
+		}
+	}
+
+	nodes, err := c.GetGameNodes(gameID)
+	if err == nil {
+		for _, n := range nodes {
+			addSubnet(n.NodeIP)
+		}
+	}
+
+	var result []string
+	for s := range subnets {
+		result = append(result, s)
+	}
+	sort.Strings(result)
+
+	return result, nil
 }
