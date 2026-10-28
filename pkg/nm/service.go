@@ -228,7 +228,15 @@ func (s *PluginService) Connect(connection map[string]map[string]dbus.Variant) *
 		}
 	}
 
-	if zoneID > 0 {
+	explicitNodeIP, _ := vpnData["node_ip"].Value().(string)
+	if explicitNodeIP != "" {
+		log.Printf("[NM-LagoFast] Using explicit node IP from settings: %s", explicitNodeIP)
+		s.activeNode = &model.NodeItem{
+			NodeIP:   explicitNodeIP,
+			Port:     9993,
+			NodeName: "Configured-Node",
+		}
+	} else if zoneID > 0 {
 		log.Printf("[NM-LagoFast] Benchmarking lowest latency relay node for Game ID %d, Zone ID %d...", gameID, zoneID)
 		bestNode, rtt, nodeErr := s.apiClient.SelectOptimalNodeForZone(gameID, zoneID)
 		if nodeErr != nil {
@@ -260,6 +268,14 @@ func (s *PluginService) Connect(connection map[string]map[string]dbus.Variant) *
 	}
 
 	var bypassCIDRs []string
+	candidateNodes, candidateErr := s.apiClient.GetGameNodesForZone(gameID, zoneID)
+	if candidateErr == nil {
+		for _, cn := range candidateNodes {
+			if cn.NodeIP != "" && cn.NodeIP != nodeIP {
+				bypassCIDRs = append(bypassCIDRs, cn.NodeIP+"/32")
+			}
+		}
+	}
 	cleanupRoute, routeErr := setupBypassRoutes(nodeIP, bypassCIDRs)
 	if routeErr != nil {
 		log.Printf("[NM-LagoFast] Warning setting host route: %v", routeErr)
