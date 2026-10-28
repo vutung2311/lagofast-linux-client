@@ -316,6 +316,13 @@ func (s *PluginService) Connect(connection map[string]map[string]dbus.Variant) *
 	}
 
 	cfgBytes, _ := json.Marshal(tunnelConfig)
+	if err := tunnel.DefaultEngine.Init(""); err != nil {
+		log.Printf("[NM-LagoFast] Failed to initialize QyProxy engine: %v", err)
+		s.tunDev.Close()
+		s.tunDev = nil
+		s.emitFailure(ErrorServiceStartFailed)
+		return dbus.NewError("org.freedesktop.NetworkManager.VPN.Error.ServiceStartFailed", []interface{}{err.Error()})
+	}
 	log.Printf("[NM-LagoFast] Starting QyProxy tunnel engine on TUN fd %d...", int(tunDev.File.Fd()))
 	if err := tunnel.DefaultEngine.Start(string(cfgBytes), int(tunDev.File.Fd())); err != nil {
 		log.Printf("[NM-LagoFast] Failed to start QyProxy engine: %v", err)

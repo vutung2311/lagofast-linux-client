@@ -305,6 +305,11 @@ func main() {
 		}
 
 		cfgBytes, _ := json.Marshal(tunnelConfig)
+		fmt.Printf("Initializing QyProxy tunnel engine...\n")
+		if err := tunnel.DefaultEngine.Init(""); err != nil {
+			fmt.Printf("Engine initialization failed: %v\n", err)
+			return
+		}
 		fmt.Printf("Starting QyProxy tunnel engine...\n")
 		if err := tunnel.DefaultEngine.Start(string(cfgBytes), int(dev.File.Fd())); err != nil {
 			fmt.Printf("Failed to start QyProxy engine: %v\n", err)

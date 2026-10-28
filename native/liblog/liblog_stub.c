@@ -168,41 +168,48 @@ int libhandshake_MD5_Final(void* ctx, unsigned char* digest) {
 }
 
 // Modern NPTL pthread_cond redirection
-int pthread_cond_init(pthread_cond_t *cond, const pthread_condattr_t *attr) {
+int qy_cond_init(pthread_cond_t *cond, const pthread_condattr_t *attr) {
     static int (*real)(pthread_cond_t *, const pthread_condattr_t *) = NULL;
     if (!real) real = (int (*)(pthread_cond_t *, const pthread_condattr_t *))dlvsym(RTLD_DEFAULT, "pthread_cond_init", "GLIBC_2.3.2");
     return real(cond, attr);
 }
 
-int pthread_cond_destroy(pthread_cond_t *cond) {
+int qy_cond_destroy(pthread_cond_t *cond) {
     static int (*real)(pthread_cond_t *) = NULL;
     if (!real) real = (int (*)(pthread_cond_t *))dlvsym(RTLD_DEFAULT, "pthread_cond_destroy", "GLIBC_2.3.2");
     return real(cond);
 }
 
-int pthread_cond_wait(pthread_cond_t *cond, pthread_mutex_t *mutex) {
+int qy_cond_wait(pthread_cond_t *cond, pthread_mutex_t *mutex) {
     static int (*real)(pthread_cond_t *, pthread_mutex_t *) = NULL;
     if (!real) real = (int (*)(pthread_cond_t *, pthread_mutex_t *))dlvsym(RTLD_DEFAULT, "pthread_cond_wait", "GLIBC_2.3.2");
     return real(cond, mutex);
 }
 
-int pthread_cond_timedwait(pthread_cond_t *cond, pthread_mutex_t *mutex, const struct timespec *abstime) {
+int qy_cond_timedwait(pthread_cond_t *cond, pthread_mutex_t *mutex, const struct timespec *abstime) {
     static int (*real)(pthread_cond_t *, pthread_mutex_t *, const struct timespec *) = NULL;
     if (!real) real = (int (*)(pthread_cond_t *, pthread_mutex_t *, const struct timespec *))dlvsym(RTLD_DEFAULT, "pthread_cond_timedwait", "GLIBC_2.3.2");
     return real(cond, mutex, abstime);
 }
 
-int pthread_cond_signal(pthread_cond_t *cond) {
+int qy_cond_signal(pthread_cond_t *cond) {
     static int (*real)(pthread_cond_t *) = NULL;
     if (!real) real = (int (*)(pthread_cond_t *))dlvsym(RTLD_DEFAULT, "pthread_cond_signal", "GLIBC_2.3.2");
     return real(cond);
 }
 
-int pthread_cond_broadcast(pthread_cond_t *cond) {
+int qy_cond_broadcast(pthread_cond_t *cond) {
     static int (*real)(pthread_cond_t *) = NULL;
     if (!real) real = (int (*)(pthread_cond_t *))dlvsym(RTLD_DEFAULT, "pthread_cond_broadcast", "GLIBC_2.3.2");
     return real(cond);
 }
+
+int pthread_cond_init(pthread_cond_t *cond, const pthread_condattr_t *attr) __attribute__((weak, alias("qy_cond_init")));
+int pthread_cond_destroy(pthread_cond_t *cond) __attribute__((weak, alias("qy_cond_destroy")));
+int pthread_cond_wait(pthread_cond_t *cond, pthread_mutex_t *mutex) __attribute__((weak, alias("qy_cond_wait")));
+int pthread_cond_timedwait(pthread_cond_t *cond, pthread_mutex_t *mutex, const struct timespec *abstime) __attribute__((weak, alias("qy_cond_timedwait")));
+int pthread_cond_signal(pthread_cond_t *cond) __attribute__((weak, alias("qy_cond_signal")));
+int pthread_cond_broadcast(pthread_cond_t *cond) __attribute__((weak, alias("qy_cond_broadcast")));
 
 // Bionic ctype table
 static char bionic_ctype_table[257];

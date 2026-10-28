@@ -8,6 +8,7 @@
 #include <dlfcn.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <libgen.h>
 
 struct ndk_string {
     void* p[3];
@@ -20,7 +21,7 @@ typedef void (*initial_t)(void*, ndk_string*);
 typedef bool (*start_t)(void*, void*, ndk_string*, ndk_string*);
 typedef void (*stop_t)(void*, ndk_string*);
 
-static std::mutex g_mutex;
+static std::recursive_mutex g_mutex;
 static bool g_initialized = false;
 static int g_running = 0;
 static int g_tun_fd = -1;
@@ -98,7 +99,7 @@ static bool file_exists(const std::string& path) {
 }
 
 int qyproxy_init(const char* lib_dir) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     if (g_initialized) {
         return 0;
     }
@@ -111,7 +112,23 @@ int qyproxy_init(const char* lib_dir) {
     if (env_dir && strlen(env_dir) > 0) {
         search_dirs.push_back(env_dir);
     }
+
+    // Check executable directory if available
+    char exe_buf[1024] = {0};
+    ssize_t exe_len = readlink("/proc/self/exe", exe_buf, sizeof(exe_buf) - 1);
+    if (exe_len > 0) {
+        char* exe_dir = dirname(exe_buf);
+        if (exe_dir) {
+            search_dirs.push_back(std::string(exe_dir));
+            search_dirs.push_back(std::string(exe_dir) + "/../bin");
+            search_dirs.push_back(std::string(exe_dir) + "/../extracted_libs");
+            search_dirs.push_back(std::string(exe_dir) + "/../compat_test");
+        }
+    }
+
     search_dirs.push_back("/usr/local/lib/lagofast");
+    search_dirs.push_back("./bin");
+    search_dirs.push_back("bin");
     search_dirs.push_back("/tmp/patch_test");
     search_dirs.push_back("./compat_test");
     search_dirs.push_back("./extracted_libs");
@@ -179,10 +196,25 @@ int qyproxy_init(const char* lib_dir) {
     g_fn_initial = (initial_t)(qy_base + 0x42070);
     g_fn_start = (start_t)(qy_base + 0x45370);
 
+    g_initialized = true;
+    return 0;
+}
+
+static bool create_client() {
+    if (g_client) {
+        typedef void (*dtor_t)(void*);
+        dtor_t fn_dtor = (dtor_t)g_vtable[25];
+        if (fn_dtor) {
+            try { fn_dtor(g_client); } catch (...) {}
+        }
+        free(g_client);
+        g_client = NULL;
+    }
+
     g_client = calloc(1, 168);
     if (!g_client) {
         g_last_error = "Failed to allocate memory for QyProxyClient";
-        return -9;
+        return false;
     }
 
     g_ctor(g_client);
@@ -212,16 +244,18 @@ int qyproxy_init(const char* lib_dir) {
     make_ndk_str(&tag_str, "QyProxy");
     g_fn_initial(g_client, &tag_str);
     free_ndk_str(&tag_str);
-
-    g_initialized = true;
-    return 0;
+    return true;
 }
 
 int qyproxy_start(const char* config_json, int tun_fd) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     if (!g_initialized) {
         int err = qyproxy_init(NULL);
         if (err != 0) return err;
+    }
+
+    if (!create_client()) {
+        return -9;
     }
 
     if (!config_json || tun_fd < 0) {
@@ -252,7 +286,7 @@ int qyproxy_start(const char* config_json, int tun_fd) {
 }
 
 void qyproxy_stop(void) {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     if (!g_initialized || !g_running) {
         return;
     }
