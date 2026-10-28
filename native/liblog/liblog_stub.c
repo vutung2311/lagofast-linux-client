@@ -69,104 +69,6 @@ void *__memcpy_chk(void *dest, const void *src, size_t len, size_t destlen) {
     return memcpy(dest, src, len);
 }
 
-int getaddrinfo(const char *node, const char *service,
-                const struct addrinfo *hints,
-                struct addrinfo **res) {
-    static int (*real_gai)(const char *, const char *, const struct addrinfo *, struct addrinfo **) = NULL;
-    if (!real_gai) real_gai = dlsym(RTLD_NEXT, "getaddrinfo");
-
-    struct addrinfo glibc_hints;
-    const struct addrinfo *p_hints = hints;
-    if (hints) {
-        memcpy(&glibc_hints, hints, sizeof(struct addrinfo));
-        void* tmp = *(void**)((char*)&glibc_hints + 24);
-        *(void**)((char*)&glibc_hints + 24) = *(void**)((char*)&glibc_hints + 32);
-        *(void**)((char*)&glibc_hints + 32) = tmp;
-        p_hints = &glibc_hints;
-    }
-
-    int ret = real_gai(node, service, p_hints, res);
-    if (ret == 0 && res && *res) {
-        for (struct addrinfo *p = *res; p != NULL; p = p->ai_next) {
-            void* tmp = *(void**)((char*)p + 24);
-            *(void**)((char*)p + 24) = *(void**)((char*)p + 32);
-            *(void**)((char*)p + 32) = tmp;
-        }
-    }
-    return ret;
-}
-
-void freeaddrinfo(struct addrinfo *res) {
-    static void (*real_fai)(struct addrinfo *) = NULL;
-    if (!real_fai) real_fai = dlsym(RTLD_NEXT, "freeaddrinfo");
-
-    if (res) {
-        for (struct addrinfo *p = res; p != NULL; p = p->ai_next) {
-            void* tmp = *(void**)((char*)p + 24);
-            *(void**)((char*)p + 24) = *(void**)((char*)p + 32);
-            *(void**)((char*)p + 32) = tmp;
-        }
-    }
-    real_fai(res);
-}
-
-int handshake_set_product_line(void* h, const char* pl) {
-    static int (*real_fn)(void*, const char*) = NULL;
-    if (!real_fn) real_fn = dlsym(RTLD_NEXT, "handshake_set_product_line");
-    return real_fn(h, pl);
-}
-
-int handshake_set_client_version(void* h, const char* ver) {
-    static int (*real_fn)(void*, const char*) = NULL;
-    if (!real_fn) real_fn = dlsym(RTLD_NEXT, "handshake_set_client_version");
-    return real_fn(h, ver);
-}
-
-int handshake_set_authentication(void* h, unsigned short authType, const char* username, const char* password) {
-    static int (*real_fn)(void*, unsigned short, const char*, const char*) = NULL;
-    if (!real_fn) real_fn = dlsym(RTLD_NEXT, "handshake_set_authentication");
-    return real_fn(h, authType, username, password);
-}
-
-int handshake_get_errno(void* h) {
-    static int (*real_fn)(void*) = NULL;
-    if (!real_fn) real_fn = dlsym(RTLD_NEXT, "handshake_get_errno");
-    return real_fn(h);
-}
-
-const char* handshake_get_strerror(void* h) {
-    static const char* (*real_fn)(void*) = NULL;
-    if (!real_fn) real_fn = dlsym(RTLD_NEXT, "handshake_get_strerror");
-    return real_fn(h);
-}
-
-unsigned int handshake_get_heartbeat_interval(void* h) {
-    static unsigned int (*real_fn)(void*) = NULL;
-    if (!real_fn) real_fn = dlsym(RTLD_NEXT, "handshake_get_heartbeat_interval");
-    return real_fn(h);
-}
-
-void handshake_log(void* ctx, int level, const char* fmt, ...) {
-    va_list ap;
-    va_start(ap, fmt);
-    fprintf(stderr, "[HANDSHAKE_LOG %d] ", level);
-    vfprintf(stderr, fmt, ap);
-    fprintf(stderr, "\n");
-    va_end(ap);
-}
-
-int libhandshake_MD5_Update(void* ctx, const void* data, unsigned int len) {
-    static int (*real_fn)(void*, const void*, unsigned int) = NULL;
-    if (!real_fn) real_fn = dlsym(RTLD_NEXT, "libhandshake_MD5_Update");
-    return real_fn(ctx, data, len);
-}
-
-int libhandshake_MD5_Final(void* ctx, unsigned char* digest) {
-    static int (*real_fn)(void*, unsigned char*) = NULL;
-    if (!real_fn) real_fn = dlsym(RTLD_NEXT, "libhandshake_MD5_Final");
-    return real_fn(ctx, digest);
-}
-
 // Modern NPTL pthread_cond redirection
 int qy_cond_init(pthread_cond_t *cond, const pthread_condattr_t *attr) {
     static int (*real)(pthread_cond_t *, const pthread_condattr_t *) = NULL;
@@ -211,6 +113,89 @@ int pthread_cond_timedwait(pthread_cond_t *cond, pthread_mutex_t *mutex, const s
 int pthread_cond_signal(pthread_cond_t *cond) __attribute__((weak, alias("qy_cond_signal")));
 int pthread_cond_broadcast(pthread_cond_t *cond) __attribute__((weak, alias("qy_cond_broadcast")));
 
+// Bionic addrinfo layout translation:
+// In Bionic: ai_canonname (offset 24), ai_addr (offset 32).
+// In Glibc:  ai_addr (offset 24), ai_canonname (offset 32).
+struct bionic_addrinfo {
+    int ai_flags;
+    int ai_family;
+    int ai_socktype;
+    int ai_protocol;
+    socklen_t ai_addrlen;
+    char *ai_canonname;
+    struct sockaddr *ai_addr;
+    struct bionic_addrinfo *ai_next;
+};
+
+void qy_freeaddrinfo(struct bionic_addrinfo *res) {
+    while (res) {
+        struct bionic_addrinfo *next = res->ai_next;
+        if (res->ai_canonname) free(res->ai_canonname);
+        if (res->ai_addr) free(res->ai_addr);
+        free(res);
+        res = next;
+    }
+}
+
+int qy_getaddrinfo(const char *node, const char *service,
+                   const struct bionic_addrinfo *hints,
+                   struct bionic_addrinfo **res) {
+    if (!res) return EAI_NONAME;
+    *res = NULL;
+
+    struct addrinfo glibc_hints;
+    struct addrinfo *p_glibc_hints = NULL;
+
+    if (hints) {
+        memset(&glibc_hints, 0, sizeof(glibc_hints));
+        glibc_hints.ai_flags = hints->ai_flags;
+        glibc_hints.ai_family = hints->ai_family;
+        glibc_hints.ai_socktype = hints->ai_socktype;
+        glibc_hints.ai_protocol = hints->ai_protocol;
+        glibc_hints.ai_addrlen = hints->ai_addrlen;
+        p_glibc_hints = &glibc_hints;
+    }
+
+    struct addrinfo *gres = NULL;
+    int ret = getaddrinfo(node, service, p_glibc_hints, &gres);
+    if (ret != 0) return ret;
+
+    struct bionic_addrinfo *head = NULL;
+    struct bionic_addrinfo **tail = &head;
+
+    for (struct addrinfo *curr = gres; curr != NULL; curr = curr->ai_next) {
+        struct bionic_addrinfo *bnode = (struct bionic_addrinfo *)calloc(1, sizeof(struct bionic_addrinfo));
+        if (!bnode) {
+            qy_freeaddrinfo(head);
+            freeaddrinfo(gres);
+            return EAI_MEMORY;
+        }
+
+        bnode->ai_flags = curr->ai_flags;
+        bnode->ai_family = curr->ai_family;
+        bnode->ai_socktype = curr->ai_socktype;
+        bnode->ai_protocol = curr->ai_protocol;
+        bnode->ai_addrlen = curr->ai_addrlen;
+
+        if (curr->ai_canonname) {
+            bnode->ai_canonname = strdup(curr->ai_canonname);
+        }
+        if (curr->ai_addr && curr->ai_addrlen > 0) {
+            bnode->ai_addr = (struct sockaddr *)malloc(curr->ai_addrlen);
+            if (bnode->ai_addr) {
+                memcpy(bnode->ai_addr, curr->ai_addr, curr->ai_addrlen);
+            }
+        }
+
+        *tail = bnode;
+        tail = &bnode->ai_next;
+    }
+
+    freeaddrinfo(gres);
+    *res = head;
+    return 0;
+}
+
 // Bionic ctype table
 static char bionic_ctype_table[257];
 const char* _ctype_ = bionic_ctype_table;
@@ -230,37 +215,62 @@ static inline FILE* translate_file(FILE* fp) {
 
 int fflush(FILE *stream) {
     static int (*real_fflush)(FILE *) = NULL;
-    if (!real_fflush) real_fflush = dlsym(RTLD_NEXT, "fflush");
+    if (!real_fflush) {
+        real_fflush = (int (*)(FILE *))dlvsym(RTLD_DEFAULT, "fflush", "GLIBC_2.2.5");
+        if (!real_fflush) real_fflush = dlsym(RTLD_NEXT, "fflush");
+    }
+    if (!real_fflush) return 0;
+    if (!stream) return real_fflush(NULL);
     return real_fflush(translate_file(stream));
 }
 
 size_t fwrite(const void *ptr, size_t size, size_t nmemb, FILE *stream) {
     static size_t (*real_fwrite)(const void *, size_t, size_t, FILE *) = NULL;
-    if (!real_fwrite) real_fwrite = dlsym(RTLD_NEXT, "fwrite");
+    if (!real_fwrite) {
+        real_fwrite = (size_t (*)(const void *, size_t, size_t, FILE *))dlvsym(RTLD_DEFAULT, "fwrite", "GLIBC_2.2.5");
+        if (!real_fwrite) real_fwrite = dlsym(RTLD_NEXT, "fwrite");
+    }
+    if (!real_fwrite) return 0;
     return real_fwrite(ptr, size, nmemb, translate_file(stream));
 }
 
 int fputs(const char *s, FILE *stream) {
     static int (*real_fputs)(const char *, FILE *) = NULL;
-    if (!real_fputs) real_fputs = dlsym(RTLD_NEXT, "fputs");
+    if (!real_fputs) {
+        real_fputs = (int (*)(const char *, FILE *))dlvsym(RTLD_DEFAULT, "fputs", "GLIBC_2.2.5");
+        if (!real_fputs) real_fputs = dlsym(RTLD_NEXT, "fputs");
+    }
+    if (!real_fputs) return 0;
     return real_fputs(s, translate_file(stream));
 }
 
 int fputc(int c, FILE *stream) {
     static int (*real_fputc)(int, FILE *) = NULL;
-    if (!real_fputc) real_fputc = dlsym(RTLD_NEXT, "fputc");
+    if (!real_fputc) {
+        real_fputc = (int (*)(int, FILE *))dlvsym(RTLD_DEFAULT, "fputc", "GLIBC_2.2.5");
+        if (!real_fputc) real_fputc = dlsym(RTLD_NEXT, "fputc");
+    }
+    if (!real_fputc) return 0;
     return real_fputc(c, translate_file(stream));
 }
 
 size_t fread(void *ptr, size_t size, size_t nmemb, FILE *stream) {
     static size_t (*real_fread)(void *, size_t, size_t, FILE *) = NULL;
-    if (!real_fread) real_fread = dlsym(RTLD_NEXT, "fread");
+    if (!real_fread) {
+        real_fread = (size_t (*)(void *, size_t, size_t, FILE *))dlvsym(RTLD_DEFAULT, "fread", "GLIBC_2.2.5");
+        if (!real_fread) real_fread = dlsym(RTLD_NEXT, "fread");
+    }
+    if (!real_fread) return 0;
     return real_fread(ptr, size, nmemb, translate_file(stream));
 }
 
 int fclose(FILE *stream) {
     static int (*real_fclose)(FILE *) = NULL;
-    if (!real_fclose) real_fclose = dlsym(RTLD_NEXT, "fclose");
+    if (!real_fclose) {
+        real_fclose = (int (*)(FILE *))dlvsym(RTLD_DEFAULT, "fclose", "GLIBC_2.2.5");
+        if (!real_fclose) real_fclose = dlsym(RTLD_NEXT, "fclose");
+    }
+    if (!real_fclose) return 0;
     FILE *t = translate_file(stream);
     if (t == stdin || t == stdout || t == stderr) return 0;
     return real_fclose(t);
@@ -268,7 +278,11 @@ int fclose(FILE *stream) {
 
 int fprintf(FILE *stream, const char *fmt, ...) {
     static int (*real_vfprintf)(FILE *, const char *, va_list) = NULL;
-    if (!real_vfprintf) real_vfprintf = dlsym(RTLD_NEXT, "vfprintf");
+    if (!real_vfprintf) {
+        real_vfprintf = (int (*)(FILE *, const char *, va_list))dlvsym(RTLD_DEFAULT, "vfprintf", "GLIBC_2.2.5");
+        if (!real_vfprintf) real_vfprintf = dlsym(RTLD_NEXT, "vfprintf");
+    }
+    if (!real_vfprintf) return 0;
     va_list ap;
     va_start(ap, fmt);
     int ret = real_vfprintf(translate_file(stream), fmt, ap);
@@ -278,7 +292,11 @@ int fprintf(FILE *stream, const char *fmt, ...) {
 
 int vfprintf(FILE *stream, const char *fmt, va_list ap) {
     static int (*real_vfprintf)(FILE *, const char *, va_list) = NULL;
-    if (!real_vfprintf) real_vfprintf = dlsym(RTLD_NEXT, "vfprintf");
+    if (!real_vfprintf) {
+        real_vfprintf = (int (*)(FILE *, const char *, va_list))dlvsym(RTLD_DEFAULT, "vfprintf", "GLIBC_2.2.5");
+        if (!real_vfprintf) real_vfprintf = dlsym(RTLD_NEXT, "vfprintf");
+    }
+    if (!real_vfprintf) return 0;
     return real_vfprintf(translate_file(stream), fmt, ap);
 }
 

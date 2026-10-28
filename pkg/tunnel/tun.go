@@ -16,9 +16,8 @@ const (
 )
 
 type ifreq struct {
-	Name  [unix.IFNAMSIZ]byte
-	Flags uint16
-	_pad  [22]byte
+	Name [unix.IFNAMSIZ]byte
+	Data [24]byte
 }
 
 type Device struct {
@@ -43,7 +42,8 @@ func OpenTun(name string, mtu int) (*Device, error) {
 
 	var req ifreq
 	copy(req.Name[:], []byte(name))
-	req.Flags = unix.IFF_TUN | unix.IFF_NO_PI
+	flags := (*uint16)(unsafe.Pointer(&req.Data[0]))
+	*flags = unix.IFF_TUN | unix.IFF_NO_PI
 
 	_, _, errno := unix.Syscall(
 		unix.SYS_IOCTL,
@@ -77,8 +77,8 @@ func (d *Device) SetIP(ip net.IP, mask net.IPMask) error {
 	var req ifreq
 	copy(req.Name[:], []byte(d.Name))
 
-	// Set IP address
-	sa := (*unix.RawSockaddrInet4)(unsafe.Pointer(&req._pad[0]))
+	// Set IP address (ifr_addr begins immediately at offset 16)
+	sa := (*unix.RawSockaddrInet4)(unsafe.Pointer(&req.Data[0]))
 	sa.Family = unix.AF_INET
 	copy(sa.Addr[:], ip.To4())
 
@@ -92,6 +92,19 @@ func (d *Device) SetIP(ip net.IP, mask net.IPMask) error {
 		return fmt.Errorf("ioctl SIOCSIFADDR failed: %w", errno)
 	}
 
+	// Set Netmask
+	if len(mask) == 4 {
+		saMask := (*unix.RawSockaddrInet4)(unsafe.Pointer(&req.Data[0]))
+		saMask.Family = unix.AF_INET
+		copy(saMask.Addr[:], mask)
+		unix.Syscall(
+			unix.SYS_IOCTL,
+			uintptr(s),
+			uintptr(unix.SIOCSIFNETMASK),
+			uintptr(unsafe.Pointer(&req)),
+		)
+	}
+
 	// Bring interface UP
 	_, _, errno = unix.Syscall(
 		unix.SYS_IOCTL,
@@ -100,11 +113,12 @@ func (d *Device) SetIP(ip net.IP, mask net.IPMask) error {
 		uintptr(unsafe.Pointer(&req)),
 	)
 	if errno == 0 {
-		req.Flags |= unix.IFF_UP | unix.IFF_RUNNING
+		ifrFlags := (*uint16)(unsafe.Pointer(&req.Data[0]))
+		*ifrFlags |= unix.IFF_UP | unix.IFF_RUNNING
 		unix.Syscall(
 			unix.SYS_IOCTL,
 			uintptr(s),
-			uintptr(unix.SIOCSIFFLAGS),
+			unix.SIOCSIFFLAGS,
 			uintptr(unsafe.Pointer(&req)),
 		)
 	}
