@@ -237,22 +237,37 @@ func (s *PluginService) Connect(connection map[string]map[string]dbus.Variant) *
 		}
 	}
 
-	log.Printf("[NM-LagoFast] Benchmarking lowest latency relay node for Game ID %d...", gameID)
-	bestNode, rtt, nodeErr := s.apiClient.SelectOptimalNode(gameID)
-	if nodeErr != nil {
-		log.Printf("[NM-LagoFast] Node benchmark warning: %v", nodeErr)
-	} else {
-		s.activeNode = bestNode
-		log.Printf("[NM-LagoFast] Selected optimal node: %s (%s:%d) [RTT: %v]", bestNode.NodeName, bestNode.NodeIP, bestNode.Port, rtt)
-	}
-
 	zoneID := 0
 	if gameID == 54758 {
-		zoneID = 45983 // Singapore zone
+		zoneID = 45983
 	}
 	if zoneIDStr, ok := vpnData["zone_id"].Value().(string); ok && zoneIDStr != "" {
 		if zid, err := strconv.Atoi(zoneIDStr); err == nil {
 			zoneID = zid
+		}
+	}
+
+	if zoneID > 0 {
+		log.Printf("[NM-LagoFast] Benchmarking lowest latency relay node for Game ID %d, Zone ID %d...", gameID, zoneID)
+		bestNode, rtt, nodeErr := s.apiClient.SelectOptimalNodeForZone(gameID, zoneID)
+		if nodeErr != nil {
+			log.Printf("[NM-LagoFast] Zone node benchmark warning: %v, falling back to global", nodeErr)
+			bestNode, rtt, nodeErr = s.apiClient.SelectOptimalNode(gameID)
+		}
+		if nodeErr != nil {
+			log.Printf("[NM-LagoFast] Node benchmark warning: %v", nodeErr)
+		} else {
+			s.activeNode = bestNode
+			log.Printf("[NM-LagoFast] Selected optimal node: %s (%s:%d) [RTT: %v]", bestNode.NodeName, bestNode.NodeIP, bestNode.Port, rtt)
+		}
+	} else {
+		log.Printf("[NM-LagoFast] Benchmarking lowest latency relay node for Game ID %d...", gameID)
+		bestNode, rtt, nodeErr := s.apiClient.SelectOptimalNode(gameID)
+		if nodeErr != nil {
+			log.Printf("[NM-LagoFast] Node benchmark warning: %v", nodeErr)
+		} else {
+			s.activeNode = bestNode
+			log.Printf("[NM-LagoFast] Selected optimal node: %s (%s:%d) [RTT: %v]", bestNode.NodeName, bestNode.NodeIP, bestNode.Port, rtt)
 		}
 	}
 
@@ -308,8 +323,8 @@ func (s *PluginService) Connect(connection map[string]map[string]dbus.Variant) *
 	s.tunDev = tunDev
 
 	groupIDStr := "320"
-	if bestNode.GroupID > 0 {
-		groupIDStr = fmt.Sprintf("%d", bestNode.GroupID)
+	if s.activeNode != nil && s.activeNode.GroupID > 0 {
+		groupIDStr = fmt.Sprintf("%d", s.activeNode.GroupID)
 	}
 
 	gameConfig := map[string]interface{}{
@@ -466,7 +481,7 @@ func (s *PluginService) Connect(connection map[string]map[string]dbus.Variant) *
 	}
 
 	s.setState(StateStarted)
-	log.Printf("[NM-LagoFast] VPN connection established successfully (Game ID: %s)", gameIDStr)
+	log.Printf("[NM-LagoFast] VPN connection established successfully (Game ID: %d)", gameID)
 	return nil
 }
 

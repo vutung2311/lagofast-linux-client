@@ -197,8 +197,22 @@ func main() {
 
 		nodePort := 9993
 		if *nodeIP == "" {
-			fmt.Printf("Benchmarking lowest latency relay node for Game ID %d...\n", *gameID)
-			bestNode, rtt, nodeErr := client.SelectOptimalNode(*gameID)
+			var bestNode *model.NodeItem
+			var rtt time.Duration
+			var nodeErr error
+
+			if zoneID > 0 {
+				fmt.Printf("Benchmarking lowest latency relay node for Game ID %d, Zone ID %d...\n", *gameID, zoneID)
+				bestNode, rtt, nodeErr = client.SelectOptimalNodeForZone(*gameID, zoneID)
+				if nodeErr != nil {
+					fmt.Printf("Zone node benchmark warning: %v, falling back to global\n", nodeErr)
+					bestNode, rtt, nodeErr = client.SelectOptimalNode(*gameID)
+				}
+			} else {
+				fmt.Printf("Benchmarking lowest latency relay node for Game ID %d...\n", *gameID)
+				bestNode, rtt, nodeErr = client.SelectOptimalNode(*gameID)
+			}
+
 			if nodeErr != nil {
 				fmt.Printf("Node benchmark warning: %v\n", nodeErr)
 			} else {

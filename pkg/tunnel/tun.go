@@ -63,7 +63,35 @@ func OpenTun(name string, mtu int) (*Device, error) {
 		MTU:  mtu,
 	}
 
+	// Optimize transmit queue length for lower packet drop under gaming bursts
+	_ = dev.SetTxQueueLen(1000)
+
 	return dev, nil
+}
+
+// SetTxQueueLen sets the transmission queue length on the TUN interface
+func (d *Device) SetTxQueueLen(qlen int) error {
+	s, err := unix.Socket(unix.AF_INET, unix.SOCK_DGRAM, 0)
+	if err != nil {
+		return err
+	}
+	defer unix.Close(s)
+
+	var req ifreq
+	copy(req.Name[:], []byte(d.Name))
+	q := (*int32)(unsafe.Pointer(&req.Data[0]))
+	*q = int32(qlen)
+
+	_, _, errno := unix.Syscall(
+		unix.SYS_IOCTL,
+		uintptr(s),
+		uintptr(unix.SIOCSIFTXQLEN),
+		uintptr(unsafe.Pointer(&req)),
+	)
+	if errno != 0 {
+		return fmt.Errorf("ioctl SIOCSIFTXQLEN failed: %w", errno)
+	}
+	return nil
 }
 
 // SetIP configures the IPv4 address on the TUN interface

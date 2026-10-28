@@ -428,14 +428,89 @@ func PingNode(ip string, port int, timeout time.Duration) (time.Duration, error)
 	return rtt, nil
 }
 
+// GetGameNodesForZone queries candidate nodes specifically for the target zone
+func (c *Client) GetGameNodesForZone(gameID, zoneID int) ([]model.NodeItem, error) {
+	if zoneID <= 0 {
+		return c.GetGameNodes(gameID)
+	}
+
+	q := url.Values{}
+	q.Set("app_no", fmt.Sprintf("%d", gameID))
+	q.Set("accelerate_object_no", fmt.Sprintf("%d", zoneID))
+	q.Set("client_type", "20")
+
+	respBytes, err := c.doRequest(http.MethodGet, "/api/accelerate_bff/v2/acct_object/node", q, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch nodes for zone %d: %w", zoneID, err)
+	}
+
+	var resp struct {
+		NodeMap map[string][]struct {
+			NodeNo          int    `json:"node_no"`
+			NodeName        string `json:"node_name"`
+			PublicIP        string `json:"public_ip"`
+			SupportProtocol string `json:"support_protocol"`
+			PingPorts       []int  `json:"ping_ports"`
+			GroupID         int    `json:"group_id"`
+		} `json:"node_map"`
+	}
+
+	if err := json.Unmarshal(respBytes, &resp); err != nil {
+		return nil, fmt.Errorf("failed to parse node json: %w", err)
+	}
+
+	var nodes []model.NodeItem
+	seenNodes := make(map[int]bool)
+
+	for zoneName, nodeList := range resp.NodeMap {
+		for _, n := range nodeList {
+			if seenNodes[n.NodeNo] {
+				continue
+			}
+			seenNodes[n.NodeNo] = true
+			port := 9993
+			if len(n.PingPorts) > 0 {
+				port = n.PingPorts[0]
+			}
+			nodes = append(nodes, model.NodeItem{
+				NodeID:   n.NodeNo,
+				GroupID:  n.GroupID,
+				NodeName: n.NodeName,
+				NodeIP:   n.PublicIP,
+				Port:     port,
+				Country:  zoneName,
+			})
+		}
+	}
+
+	if len(nodes) == 0 {
+		return c.GetGameNodes(gameID)
+	}
+
+	return nodes, nil
+}
+
+// SelectOptimalNodeForZone benchmarks only the candidate nodes for the chosen game zone
+func (c *Client) SelectOptimalNodeForZone(gameID, zoneID int) (*model.NodeItem, time.Duration, error) {
+	nodes, err := c.GetGameNodesForZone(gameID, zoneID)
+	if err != nil {
+		return nil, 0, err
+	}
+	return c.benchmarkNodes(nodes)
+}
+
 // SelectOptimalNode queries all candidate nodes for a game and selects the lowest RTT node via parallel UDP ping
 func (c *Client) SelectOptimalNode(gameID int) (*model.NodeItem, time.Duration, error) {
 	nodes, err := c.GetGameNodes(gameID)
 	if err != nil {
 		return nil, 0, err
 	}
+	return c.benchmarkNodes(nodes)
+}
+
+func (c *Client) benchmarkNodes(nodes []model.NodeItem) (*model.NodeItem, time.Duration, error) {
 	if len(nodes) == 0 {
-		return nil, 0, fmt.Errorf("no candidate nodes found for game %d", gameID)
+		return nil, 0, fmt.Errorf("no candidate nodes found")
 	}
 
 	type pingResult struct {
