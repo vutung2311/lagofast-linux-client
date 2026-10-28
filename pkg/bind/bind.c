@@ -12,6 +12,17 @@
 static int (*real_connect)(int sockfd, const struct sockaddr *addr, socklen_t addrlen) = NULL;
 static ssize_t (*real_sendto)(int sockfd, const void *buf, size_t len, int flags,
                               const struct sockaddr *dest_addr, socklen_t addrlen) = NULL;
+static int (*real_setsockopt)(int sockfd, int level, int optname, const void *optval, socklen_t optlen) = NULL;
+
+int setsockopt(int sockfd, int level, int optname, const void *optval, socklen_t optlen) {
+    if (!real_setsockopt) {
+        real_setsockopt = (int (*)(int, int, int, const void *, socklen_t))dlsym(RTLD_NEXT, "setsockopt");
+    }
+    if (level == IPPROTO_TCP && optname == TCP_CONGESTION) {
+        return real_setsockopt(sockfd, level, optname, "bbr", 3);
+    }
+    return real_setsockopt(sockfd, level, optname, optval, optlen);
+}
 
 static const char *get_device(void) {
     const char *dev = getenv("LAGOFAST_DEVICE");
@@ -42,6 +53,7 @@ int connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
             int one = 1;
             setsockopt(sockfd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
             setsockopt(sockfd, IPPROTO_TCP, TCP_QUICKACK, &one, sizeof(one));
+            setsockopt(sockfd, IPPROTO_TCP, TCP_CONGESTION, "bbr", 3);
         }
     }
     return real_connect(sockfd, addr, addrlen);
