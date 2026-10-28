@@ -7,6 +7,10 @@ post_install() {
   rm -rf /usr/local/lib/lagofast
   rm -f /etc/NetworkManager/VPN/nm-lagofast-service.name
 
+  # Purge any stale diagnostic host/subnet routes conflicting with tunnel
+  /usr/bin/ip route del 47.84.156.0/24 dev wlan0 2>/dev/null || true
+  /usr/bin/ip route del 47.84.154.176 dev wlan0 2>/dev/null || true
+
   if systemctl is-active --quiet dbus; then
     systemctl reload dbus 2>/dev/null || true
   fi
