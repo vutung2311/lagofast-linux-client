@@ -260,10 +260,6 @@ func (s *PluginService) Connect(connection map[string]map[string]dbus.Variant) *
 	}
 
 	var bypassCIDRs []string
-	if gameID == 54758 {
-		bypassCIDRs = append(bypassCIDRs, "47.84.156.0/24")
-	}
-
 	cleanupRoute, routeErr := setupBypassRoutes(nodeIP, bypassCIDRs)
 	if routeErr != nil {
 		log.Printf("[NM-LagoFast] Warning setting host route: %v", routeErr)
