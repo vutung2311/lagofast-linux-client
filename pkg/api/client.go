@@ -710,14 +710,37 @@ func (c *Client) GetGameRoutingSubnets(gameID, zoneID int) ([]string, error) {
 		mask := net.CIDRMask(16, 32)
 		network := ip4.Mask(mask)
 		subnets[fmt.Sprintf("%s/16", network.String())] = true
+
+		if ip4[0] == 8 && ip4[1] >= 208 && ip4[1] <= 223 {
+			subnets["8.216.0.0/16"] = true
+			subnets["8.219.0.0/16"] = true
+			subnets["8.220.0.0/16"] = true
+			subnets["8.221.0.0/16"] = true
+			subnets["8.222.0.0/16"] = true
+		} else if ip4[0] == 47 && (ip4[1] >= 76 && ip4[1] <= 95 || ip4[1] >= 236 && ip4[1] <= 245) {
+			subnets["47.84.0.0/16"] = true
+			subnets["47.237.0.0/16"] = true
+			subnets["47.238.0.0/16"] = true
+			subnets["47.242.0.0/16"] = true
+			subnets["47.76.0.0/16"] = true
+		}
 	}
 
 	c.extractZonePingIPs(gameID, zoneID, addSubnet)
 
-	acctDetail, err := c.GetAcctDetailAll(gameID, zoneID)
-	if err != nil || acctDetail == nil {
-		// No additional delay detect zones available
-	} else {
+	nodes, nodeErr := c.GetGameNodesForZone(gameID, zoneID)
+	if nodeErr != nil {
+		nodes = nil
+	}
+	for _, n := range nodes {
+		addSubnet(n.NodeIP)
+	}
+
+	acctDetail, detailErr := c.GetAcctDetailAll(gameID, zoneID)
+	if detailErr != nil {
+		acctDetail = nil
+	}
+	if acctDetail != nil {
 		for _, pz := range acctDetail.DelayDetectPingZones {
 			for _, ip := range pz.DetectionIP {
 				addSubnet(ip)

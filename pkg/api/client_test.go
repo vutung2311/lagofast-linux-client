@@ -83,3 +83,14 @@ func TestSelectOptimalNode(t *testing.T) {
 	t.Logf("Selected node: %s (%s:%d), RTT: %v, GroupID: %d", node.NodeName, node.NodeIP, node.Port, rtt, node.GroupID)
 }
 
+func TestGetGameRoutingSubnetsDynamic(t *testing.T) {
+	client := NewClient("")
+	client.SetToken("20261021200403000000000001114692_f4331fdf0b3343d087b9", "20261021200403000000000001114692")
+
+	subnets, err := client.GetGameRoutingSubnets(54758, 45983)
+	if err != nil {
+		t.Fatalf("GetGameRoutingSubnets failed: %v", err)
+	}
+	t.Logf("Discovered %d subnets: %v", len(subnets), subnets)
+}
+

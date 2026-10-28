@@ -17,7 +17,6 @@ import (
 	"github.com/lagofast/lagofast-vpn/pkg/api"
 	"github.com/lagofast/lagofast-vpn/pkg/auth"
 	"github.com/lagofast/lagofast-vpn/pkg/model"
-	"github.com/lagofast/lagofast-vpn/pkg/nm"
 	"github.com/lagofast/lagofast-vpn/pkg/tunnel"
 )
 
@@ -394,14 +393,8 @@ func main() {
 				combinedRoutes = append(combinedRoutes, r)
 			}
 		}
-		for _, r := range nm.DefaultGameCIDRs[*gameID] {
-			if !seenRoutes[r] {
-				seenRoutes[r] = true
-				combinedRoutes = append(combinedRoutes, r)
-			}
-		}
 		gameRoutes := strings.Join(combinedRoutes, ", ")
-		fmt.Printf("Configured %d routing subnets (dynamic + game cluster baseline).\n", len(combinedRoutes))
+		fmt.Printf("Configured %d dynamic routing subnets from LagoFast REST API.\n", len(combinedRoutes))
 
 		checkCmd := exec.Command("nmcli", "connection", "show", targetName)
 		if err := checkCmd.Run(); err != nil {

@@ -20,25 +20,6 @@ import (
 	"github.com/lagofast/lagofast-vpn/pkg/tunnel"
 )
 
-var DefaultGameCIDRs = map[int][]string{
-	54758: { // Where Winds Meet (NetEase & Cloud Game Servers)
-		"47.84.0.0/16",   // Alibaba Cloud Singapore (Where Winds Meet Server Cluster)
-		"47.237.0.0/16",  // Alibaba Cloud Singapore Cluster
-		"47.242.0.0/16",  // Alibaba Cloud Singapore
-		"47.238.0.0/16",  // Alibaba Cloud Singapore
-		"47.76.0.0/16",   // Alibaba Cloud Singapore
-		"8.219.0.0/16",   // Alibaba Cloud Singapore Detection
-		"43.245.0.0/16",  // NetEase Hong Kong / Singapore
-		"119.28.0.0/16",  // Tencent / NetEase SEA Clusters
-		"150.109.0.0/16", // NetEase Singapore Cluster
-		"129.226.0.0/16", // Tencent / NetEase SEA
-		"101.32.0.0/16",  // NetEase SEA Gaming
-		"14.0.45.0/24",   // NetEase Tokyo Cluster
-		"8.216.0.0/16",   // NetEase Japan Cluster
-		"163.171.0.0/16", // NetEase Singapore / Japan
-	},
-}
-
 const (
 	DBusInterface = "org.freedesktop.NetworkManager.VPN.Plugin"
 	DBusObjectPath = "/org/freedesktop/NetworkManager/VPN/Plugin"
@@ -422,10 +403,11 @@ func (s *PluginService) Connect(connection map[string]map[string]dbus.Variant) *
 	gatewayIP := net.ParseIP("10.10.10.1")
 	dnsIP := net.ParseIP("8.8.8.8")
 
-	// Assemble Subnet / CIDR routes for game acceleration
+	// Assemble Subnet / CIDR routes dynamically from LagoFast REST API
 	var routesList [][]uint32
 	cidrs, err := s.apiClient.GetGameRoutingSubnets(gameID, zoneID)
 	if err != nil {
+		log.Printf("[NM-LagoFast] Dynamic routing subnets lookup failed: %v", err)
 		cidrs = nil
 	}
 	seenCIDRs := make(map[string]bool)
@@ -436,12 +418,7 @@ func (s *PluginService) Connect(connection map[string]map[string]dbus.Variant) *
 			combinedCIDRs = append(combinedCIDRs, c)
 		}
 	}
-	for _, c := range DefaultGameCIDRs[gameID] {
-		if !seenCIDRs[c] {
-			seenCIDRs[c] = true
-			combinedCIDRs = append(combinedCIDRs, c)
-		}
-	}
+	log.Printf("[NM-LagoFast] Dynamically resolved %d routing subnets from LagoFast REST API for Game ID %d, Zone ID %d", len(combinedCIDRs), gameID, zoneID)
 	nodeIPParsed := net.ParseIP(nodeIP)
 	for _, cidr := range combinedCIDRs {
 		ip, ipnet, err := net.ParseCIDR(cidr)

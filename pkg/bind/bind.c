@@ -4,6 +4,7 @@
 #include <dlfcn.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <arpa/inet.h>
 #include <string.h>
 #include <unistd.h>
@@ -37,6 +38,10 @@ int connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
         if (!is_loopback && !is_local_lan && !is_web_port) {
             const char *dev = get_device();
             setsockopt(sockfd, SOL_SOCKET, 25 /* SO_BINDTODEVICE */, dev, strlen(dev) + 1);
+
+            int one = 1;
+            setsockopt(sockfd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
+            setsockopt(sockfd, IPPROTO_TCP, TCP_QUICKACK, &one, sizeof(one));
         }
     }
     return real_connect(sockfd, addr, addrlen);
