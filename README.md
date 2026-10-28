@@ -2,6 +2,8 @@
 
 A native Linux client and NetworkManager VPN plugin for **LagoFast / Qiyou Game Booster**, enabling low-latency gaming routing on desktop Linux, SteamOS (Steam Deck), and gaming distributions (Bazzite, Nobara, Arch, Fedora, Ubuntu).
 
+> 💡 **Developer & AI Agent Reference:** See [docs/ARCHITECTURE_AND_AGENT_GUIDE.md](docs/ARCHITECTURE_AND_AGENT_GUIDE.md) for deep-dive architectural diagrams, reverse-engineered protocol details, routing loop prevention rules, Wine/Proton socket edge cases, and the smart multi-probe selection benchmark.
+
 ---
 
 ## Architecture Overview
