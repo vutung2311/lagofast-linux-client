@@ -132,20 +132,24 @@ int qyproxy_init(const char* lib_dir) {
         search_dirs.push_back(env_dir);
     }
 
+    // Dedicated LagoFast library directories take top priority
+    search_dirs.push_back("/usr/lib/lagofast");
+    search_dirs.push_back("/usr/local/lib/lagofast");
+
     // Check executable directory if available
     char exe_buf[1024] = {0};
     ssize_t exe_len = readlink("/proc/self/exe", exe_buf, sizeof(exe_buf) - 1);
     if (exe_len > 0) {
         char* exe_dir = dirname(exe_buf);
         if (exe_dir) {
-            search_dirs.push_back(std::string(exe_dir));
+            search_dirs.push_back(std::string(exe_dir) + "/lagofast");
+            search_dirs.push_back(std::string(exe_dir) + "/../lib/lagofast");
             search_dirs.push_back(std::string(exe_dir) + "/../bin");
             search_dirs.push_back(std::string(exe_dir) + "/../extracted_libs");
             search_dirs.push_back(std::string(exe_dir) + "/../compat_test");
         }
     }
 
-    search_dirs.push_back("/usr/local/lib/lagofast");
     search_dirs.push_back("./bin");
     search_dirs.push_back("bin");
     search_dirs.push_back("/tmp/patch_test");
@@ -154,14 +158,24 @@ int qyproxy_init(const char* lib_dir) {
 
     std::string found_log, found_proxy, found_qy;
 
+    // Both libproxy.so and libqyproxy-lib.so must come from the same directory
     for (const auto& dir : search_dirs) {
-        std::string p_log = dir + "/liblog.so";
         std::string p_proxy = dir + "/libproxy.so";
         std::string p_qy = dir + "/libqyproxy-lib.so";
 
-        if (found_log.empty() && file_exists(p_log)) found_log = p_log;
-        if (found_proxy.empty() && file_exists(p_proxy)) found_proxy = p_proxy;
-        if (found_qy.empty() && file_exists(p_qy)) found_qy = p_qy;
+        if (file_exists(p_proxy) && file_exists(p_qy)) {
+            found_proxy = p_proxy;
+            found_qy = p_qy;
+            break;
+        }
+    }
+
+    for (const auto& dir : search_dirs) {
+        std::string p_log = dir + "/liblog.so";
+        if (file_exists(p_log)) {
+            found_log = p_log;
+            break;
+        }
     }
 
     if (found_log.empty()) {

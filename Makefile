@@ -1,4 +1,4 @@
-.PHONY: all build clean test install
+.PHONY: all build clean test install package
 
 all: build
 
@@ -9,6 +9,9 @@ build:
 	go build -o bin/lagofast ./cmd/lagofast
 	go build -o bin/nm-lagofast-service ./cmd/nm-lagofast-service
 
+package:
+	cd packaging/arch && makepkg -f
+
 test:
 	go test -v ./...
 
@@ -18,3 +21,4 @@ install: build
 clean:
 	rm -rf bin
 	rm -f plasma-plugin/*.moc plasma-plugin/*.so
+	rm -rf packaging/arch/src packaging/arch/pkg

@@ -1,0 +1,81 @@
+# Maintainer: LagoFast VPN Project
+pkgname=lagofast-vpn
+pkgver=1.0.0
+pkgrel=1
+pkgdesc="Native Linux client & NetworkManager VPN plugin for LagoFast gaming accelerator"
+arch=('x86_64')
+url="https://github.com/lagofast/lagofast-vpn"
+license=('custom')
+depends=('glibc' 'networkmanager' 'libcap')
+optdepends=(
+  'plasma-nm: KDE Plasma desktop tray and VPN settings UI integration'
+  'qt6-base: Qt6 plugin runtime'
+)
+makedepends=(
+  'go'
+  'gcc'
+  'pkgconf'
+  'libnm'
+  'qt6-base'
+  'kcoreaddons'
+  'networkmanager-qt'
+  'plasma-nm'
+)
+provides=('networkmanager-lagofast' 'lagofast')
+conflicts=('networkmanager-lagofast')
+install='lagofast-vpn.install'
+options=('!strip' '!debug')
+source=()
+
+build() {
+  local _root
+  _root="$(cd "$startdir/../.." && pwd)"
+  cd "$_root"
+
+  mkdir -p bin
+  gcc -shared -fPIC -O2 pkg/bind/bind.c -ldl -o bin/liblagofast_bind.so
+  gcc -shared -fPIC -O2 native/liblog/liblog_stub.c -ldl -lpthread -o bin/liblog.so
+
+  export CGO_ENABLED=1
+  go build -trimpath -ldflags="-s -w" -o bin/nm-lagofast-service ./cmd/nm-lagofast-service
+  go build -trimpath -ldflags="-s -w" -o bin/lagofast ./cmd/lagofast
+
+  if command -v /usr/lib/qt6/moc >/dev/null 2>&1 && command -v g++ >/dev/null 2>&1; then
+    cd "$_root/plasma-plugin"
+    /usr/lib/qt6/moc -I/usr/include/qt6 -I/usr/include/qt6/QtCore -I/usr/include/qt6/QtWidgets -I/usr/include/KF6/KCoreAddons -I/usr/include/KF6/NetworkManagerQt -I/usr/include/KF6 lagofast_ui_plugin.cpp -o lagofast_ui_plugin.moc
+    g++ -shared -fPIC -O2 lagofast_ui_plugin.cpp \
+      -I. \
+      -I/usr/include/qt6 -I/usr/include/qt6/QtCore -I/usr/include/qt6/QtWidgets -I/usr/include/qt6/QtGui -I/usr/include/qt6/QtDBus \
+      -I/usr/include/KF6 -I/usr/include/KF6/KCoreAddons -I/usr/include/KF6/NetworkManagerQt \
+      $(pkg-config --cflags libnm gio-2.0) \
+      -lQt6Core -lQt6Widgets -lQt6Gui -lQt6DBus \
+      -lKF6CoreAddons -lKF6NetworkManagerQt \
+      -lplasmanm_editor \
+      -o plasmanetworkmanagement_lagofastui.so
+  fi
+}
+
+package() {
+  local _root
+  _root="$(cd "$startdir/../.." && pwd)"
+
+  # Binaries
+  install -Dm755 "$_root/bin/lagofast" "$pkgdir/usr/bin/lagofast"
+  install -Dm755 "$_root/bin/nm-lagofast-service" "$pkgdir/usr/lib/nm-lagofast-service"
+  ln -sf /usr/lib/nm-lagofast-service "$pkgdir/usr/bin/nm-lagofast-service"
+
+  # Native libraries
+  install -Dm755 "$_root/bin/liblagofast_bind.so" "$pkgdir/usr/lib/liblagofast_bind.so"
+  install -Dm755 "$_root/bin/liblog.so" "$pkgdir/usr/lib/lagofast/liblog.so"
+  install -Dm755 "$_root/extracted_libs/libproxy.so" "$pkgdir/usr/lib/lagofast/libproxy.so"
+  install -Dm755 "$_root/extracted_libs/libqyproxy-lib.so" "$pkgdir/usr/lib/lagofast/libqyproxy-lib.so"
+
+  # NetworkManager & D-Bus configurations
+  install -Dm644 "$_root/config/nm-lagofast-service.name" "$pkgdir/usr/lib/NetworkManager/VPN/nm-lagofast-service.name"
+  install -Dm644 "$_root/config/org.freedesktop.NetworkManager.lagofast.conf" "$pkgdir/usr/share/dbus-1/system.d/org.freedesktop.NetworkManager.lagofast.conf"
+
+  # KDE Plasma NM UI Plugin
+  if [ -f "$_root/plasma-plugin/plasmanetworkmanagement_lagofastui.so" ]; then
+    install -Dm755 "$_root/plasma-plugin/plasmanetworkmanagement_lagofastui.so" "$pkgdir/usr/lib/qt6/plugins/plasma/network/vpn/plasmanetworkmanagement_lagofastui.so"
+  fi
+}

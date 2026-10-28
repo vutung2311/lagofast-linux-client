@@ -39,31 +39,50 @@ func readSessionFromFile(path string) (*UserSession, error) {
 	return &session, nil
 }
 
+func tryReadSession(path string) *UserSession {
+	session, err := readSessionFromFile(path)
+	if err != nil {
+		return nil
+	}
+	return session
+}
+
 func LoadSession() (*UserSession, error) {
-	home, err := os.UserHomeDir()
-	if err == nil && home != "" {
-		userPath := filepath.Join(home, ConfigDirName, SessionFileName)
-		session, err := readSessionFromFile(userPath)
-		if err == nil {
+	home, _ := os.UserHomeDir()
+	if home != "" {
+		if session := tryReadSession(filepath.Join(home, ConfigDirName, SessionFileName)); session != nil {
 			return session, nil
 		}
 	}
 
-	candidates := []string{os.Getenv("SUDO_USER"), os.Getenv("USER"), "tung"}
+	var candidates []string
+	if su := os.Getenv("SUDO_USER"); su != "" {
+		candidates = append(candidates, su)
+	}
+	if u := os.Getenv("USER"); u != "" {
+		candidates = append(candidates, u)
+	}
+	if entries, err := os.ReadDir("/home"); err != nil {
+		entries = nil
+	} else {
+		for _, e := range entries {
+			if e.IsDir() {
+				candidates = append(candidates, e.Name())
+			}
+		}
+	}
+
 	for _, sudoUser := range candidates {
 		if sudoUser == "" || sudoUser == "root" {
 			continue
 		}
 		userPath := filepath.Join("/home", sudoUser, ConfigDirName, SessionFileName)
-		session, err := readSessionFromFile(userPath)
-		if err == nil {
+		if session := tryReadSession(userPath); session != nil {
 			return session, nil
 		}
 	}
 
-	globalPath := filepath.Join(GlobalConfigDir, SessionFileName)
-	session, err := readSessionFromFile(globalPath)
-	if err == nil {
+	if session := tryReadSession(filepath.Join(GlobalConfigDir, SessionFileName)); session != nil {
 		return session, nil
 	}
 

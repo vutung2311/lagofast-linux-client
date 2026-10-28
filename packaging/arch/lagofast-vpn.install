@@ -1,0 +1,33 @@
+post_install() {
+  setcap cap_net_admin,cap_net_raw+eip usr/bin/lagofast 2>/dev/null || true
+
+  rm -f /usr/local/bin/nm-lagofast-service
+  rm -f /usr/local/bin/lagofast
+  rm -f /usr/local/lib/liblagofast_bind.so
+  rm -rf /usr/local/lib/lagofast
+  rm -f /etc/NetworkManager/VPN/nm-lagofast-service.name
+
+  if systemctl is-active --quiet dbus; then
+    systemctl reload dbus 2>/dev/null || true
+  fi
+  if systemctl is-active --quiet NetworkManager; then
+    systemctl reload NetworkManager 2>/dev/null || true
+  fi
+
+  echo "==> LagoFast VPN package installed successfully."
+  echo "==> NetworkManager service registered as 'lagofast'."
+  echo "==> CLI available at 'lagofast'."
+}
+
+post_upgrade() {
+  post_install
+}
+
+post_remove() {
+  if systemctl is-active --quiet NetworkManager; then
+    systemctl reload NetworkManager 2>/dev/null || true
+  fi
+  if systemctl is-active --quiet dbus; then
+    systemctl reload dbus 2>/dev/null || true
+  fi
+}
