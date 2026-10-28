@@ -366,7 +366,7 @@ func main() {
 
 		fmt.Printf("Configuring NetworkManager connection '%s' (Game ID: %d)...\n", targetName, *gameID)
 		vpnData := fmt.Sprintf("game_id=%d", *gameID)
-		gameRoutes := "43.245.0.0/16, 119.28.0.0/16, 150.109.0.0/16, 129.226.0.0/16, 101.32.0.0/16, 47.242.0.0/16, 47.238.0.0/16, 47.76.0.0/16, 14.0.45.0/24, 8.216.0.0/16, 163.171.0.0/16"
+		gameRoutes := "47.84.0.0/16, 47.237.0.0/16, 8.219.0.0/16, 43.245.0.0/16, 119.28.0.0/16, 150.109.0.0/16, 129.226.0.0/16, 101.32.0.0/16, 47.242.0.0/16, 47.238.0.0/16, 47.76.0.0/16, 14.0.45.0/24, 8.216.0.0/16, 163.171.0.0/16"
 
 		checkCmd := exec.Command("nmcli", "connection", "show", targetName)
 		if err := checkCmd.Run(); err != nil {

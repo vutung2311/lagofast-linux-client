@@ -91,6 +91,7 @@ type Zone struct {
 
 type NodeItem struct {
 	NodeID   int    `json:"node_id"`
+	GroupID  int    `json:"group_id"`
 	NodeName string `json:"node_name"`
 	NodeIP   string `json:"node_ip"`
 	Port     int    `json:"port"`

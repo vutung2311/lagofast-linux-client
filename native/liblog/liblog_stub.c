@@ -6,6 +6,8 @@
 #include <ctype.h>
 #include <errno.h>
 #include <netdb.h>
+#include <arpa/inet.h>
+#include <stdbool.h>
 #include <dlfcn.h>
 #include <pthread.h>
 
@@ -315,4 +317,18 @@ static void init_bionic_compat(void) {
         if (i == ' ')   val |= 0x80;
         bionic_ctype_table[i + 1] = val;
     }
+}
+
+// Safe implementation of qyproxy::isIp(std::string) to avoid C++ exception unwind crashes
+bool _ZN7qyproxy4isIpENSt6__ndk112basic_stringIcNS0_11char_traitsIcEENS0_9allocatorIcEEEE(void* ndk_str) {
+    if (!ndk_str) return false;
+    unsigned char* b = (unsigned char*)ndk_str;
+    const char* s = (b[0] & 1) == 0 ? (const char*)(b + 1) : *((const char**)(b + 16));
+    if (!s || !s[0]) return false;
+
+    struct in_addr a4;
+    if (inet_pton(AF_INET, s, &a4) == 1) return true;
+    struct in6_addr a6;
+    if (inet_pton(AF_INET6, s, &a6) == 1) return true;
+    return false;
 }

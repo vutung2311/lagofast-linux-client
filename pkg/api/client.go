@@ -351,6 +351,7 @@ func (c *Client) GetGameNodes(gameID int) ([]model.NodeItem, error) {
 				PublicIP        string `json:"public_ip"`
 				SupportProtocol string `json:"support_protocol"`
 				PingPorts       []int  `json:"ping_ports"`
+				GroupID         int    `json:"group_id"`
 			} `json:"node_map"`
 		}
 
@@ -373,6 +374,7 @@ func (c *Client) GetGameNodes(gameID int) ([]model.NodeItem, error) {
 
 				allNodes = append(allNodes, model.NodeItem{
 					NodeID:   n.NodeNo,
+					GroupID:  n.GroupID,
 					NodeName: n.NodeName,
 					NodeIP:   n.PublicIP,
 					Port:     port,

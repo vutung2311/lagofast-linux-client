@@ -19,14 +19,17 @@ import (
 
 var DefaultGameCIDRs = map[int][]string{
 	54758: { // Where Winds Meet (NetEase & Cloud Game Servers)
+		"47.84.0.0/16",   // Alibaba Cloud Singapore (Where Winds Meet Server Cluster)
+		"47.237.0.0/16",  // Alibaba Cloud Singapore Cluster
+		"47.242.0.0/16",  // Alibaba Cloud Singapore
+		"47.238.0.0/16",  // Alibaba Cloud Singapore
+		"47.76.0.0/16",   // Alibaba Cloud Singapore
+		"8.219.0.0/16",   // Alibaba Cloud Singapore Detection
 		"43.245.0.0/16",  // NetEase Hong Kong / Singapore
 		"119.28.0.0/16",  // Tencent / NetEase SEA Clusters
 		"150.109.0.0/16", // NetEase Singapore Cluster
 		"129.226.0.0/16", // Tencent / NetEase SEA
 		"101.32.0.0/16",  // NetEase SEA Gaming
-		"47.242.0.0/16",  // Alibaba Cloud Singapore
-		"47.238.0.0/16",  // Alibaba Cloud Singapore
-		"47.76.0.0/16",   // Alibaba Cloud Singapore
 		"14.0.45.0/24",   // NetEase Tokyo Cluster
 		"8.216.0.0/16",   // NetEase Japan Cluster
 		"163.171.0.0/16", // NetEase Singapore / Japan
@@ -254,6 +257,11 @@ func (s *PluginService) Connect(connection map[string]map[string]dbus.Variant) *
 	}
 	s.tunDev = tunDev
 
+	groupIDStr := "320"
+	if bestNode.GroupID > 0 {
+		groupIDStr = fmt.Sprintf("%d", bestNode.GroupID)
+	}
+
 	// Construct QyProxy tunnel configuration
 	tunnelConfig := map[string]interface{}{
 		"server": map[string]interface{}{
@@ -262,7 +270,7 @@ func (s *PluginService) Connect(connection map[string]map[string]dbus.Variant) *
 		},
 		"client": map[string]interface{}{
 			"protocol":           "UDP",
-			"group_id":           "320",
+			"group_id":           groupIDStr,
 			"login_token":        s.session.Token,
 			"username":           accountName,
 			"password":           plainPwd,
@@ -307,7 +315,7 @@ func (s *PluginService) Connect(connection map[string]map[string]dbus.Variant) *
 			},
 			"qyproxy_game_config": map[string]interface{}{
 				"confuse":            7,
-				"enableProxyModeDNS": true,
+				"enableProxyModeDNS": false,
 				"enableUdpTunnel":    true,
 				"log_level":          "DEBUG",
 				"nat_open":           false,
