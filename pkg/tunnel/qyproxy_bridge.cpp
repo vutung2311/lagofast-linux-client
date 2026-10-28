@@ -8,6 +8,8 @@
 #include <dlfcn.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <sys/socket.h>
+#include <net/if.h>
 #include <libgen.h>
 
 struct ndk_string {
@@ -77,7 +79,24 @@ static void my_event_cb(void* self, void* event) {
     std::cout << "[QYPROXY] Native event callback received" << std::endl;
 }
 
+static std::string g_bind_interface = "wlan0";
+
+void qyproxy_set_bind_interface(const char* iface) {
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
+    if (iface && iface[0]) {
+        g_bind_interface = iface;
+    }
+}
+
 static bool my_socket_protect(void* self, int fd, bool is_ipv6) {
+    if (fd >= 0 && !g_bind_interface.empty()) {
+        struct ifreq ifr;
+        memset(&ifr, 0, sizeof(ifr));
+        strncpy(ifr.ifr_name, g_bind_interface.c_str(), IFNAMSIZ - 1);
+        if (setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE, (void*)&ifr, sizeof(ifr)) < 0) {
+            // Note if bind failed (e.g. if interface not found)
+        }
+    }
     return true;
 }
 
@@ -202,11 +221,6 @@ int qyproxy_init(const char* lib_dir) {
 
 static bool create_client() {
     if (g_client) {
-        typedef void (*dtor_t)(void*);
-        dtor_t fn_dtor = (dtor_t)g_vtable[25];
-        if (fn_dtor) {
-            try { fn_dtor(g_client); } catch (...) {}
-        }
         free(g_client);
         g_client = NULL;
     }

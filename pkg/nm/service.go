@@ -7,9 +7,12 @@ import (
 	"log"
 	"net"
 	"os"
+	"os/exec"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
+	"time"
 
 	"github.com/godbus/dbus/v5"
 	"github.com/lagofast/lagofast-vpn/pkg/api"
@@ -66,13 +69,14 @@ const (
 )
 
 type PluginService struct {
-	conn       *dbus.Conn
-	state      uint32
-	tunDev     *tunnel.Device
-	apiClient  *api.Client
-	session    *model.UserSession
-	activeGame *model.GameItem
-	activeNode *model.NodeItem
+	conn         *dbus.Conn
+	state        uint32
+	tunDev       *tunnel.Device
+	apiClient    *api.Client
+	session      *model.UserSession
+	activeGame   *model.GameItem
+	activeNode   *model.NodeItem
+	routeCleanup func()
 }
 
 func NewPluginService() (*PluginService, error) {
@@ -144,6 +148,40 @@ func (s *PluginService) NeedSecrets(connection map[string]map[string]dbus.Varian
 // ConnectInteractive is invoked when interactive secrets are provided
 func (s *PluginService) ConnectInteractive(connection map[string]map[string]dbus.Variant, details map[string]dbus.Variant) *dbus.Error {
 	return s.Connect(connection)
+}
+
+func setupBypassRoutes(nodeIP string, bypassCIDRs []string) (func(), error) {
+	out, err := exec.Command("ip", "route", "show", "default").Output()
+	if err != nil {
+		return func() {}, err
+	}
+	fields := strings.Fields(string(out))
+	var gw, dev string
+	for i := 0; i < len(fields)-1; i++ {
+		if fields[i] == "via" && gw == "" {
+			gw = fields[i+1]
+		}
+		if fields[i] == "dev" && dev == "" {
+			dev = fields[i+1]
+		}
+	}
+	if gw == "" || dev == "" {
+		return func() {}, fmt.Errorf("unable to determine default gateway")
+	}
+
+	tunnel.DefaultEngine.SetBindInterface(dev)
+	exec.Command("ip", "route", "replace", nodeIP+"/32", "via", gw, "dev", dev).Run()
+	for _, cidr := range bypassCIDRs {
+		exec.Command("ip", "route", "replace", cidr, "via", gw, "dev", dev).Run()
+	}
+
+	cleanup := func() {
+		exec.Command("ip", "route", "del", nodeIP+"/32", "via", gw, "dev", dev).Run()
+		for _, cidr := range bypassCIDRs {
+			exec.Command("ip", "route", "del", cidr, "via", gw, "dev", dev).Run()
+		}
+	}
+	return cleanup, nil
 }
 
 // Connect is invoked by NetworkManager when initiating a VPN connection
@@ -225,6 +263,18 @@ func (s *PluginService) Connect(connection map[string]map[string]dbus.Variant) *
 		nodePort = s.activeNode.Port
 	}
 
+	var bypassCIDRs []string
+	if gameID == 54758 {
+		bypassCIDRs = append(bypassCIDRs, "47.84.156.0/24")
+	}
+
+	cleanupRoute, routeErr := setupBypassRoutes(nodeIP, bypassCIDRs)
+	if routeErr != nil {
+		log.Printf("[NM-LagoFast] Warning setting host route: %v", routeErr)
+	} else {
+		s.routeCleanup = cleanupRoute
+	}
+
 	log.Printf("[NM-LagoFast] Fetching acceleration credentials for Game ID %d, Zone ID %d...", gameID, zoneID)
 	accountName := s.session.Account
 	plainPwd := "tposwy"
@@ -260,6 +310,24 @@ func (s *PluginService) Connect(connection map[string]map[string]dbus.Variant) *
 	groupIDStr := "320"
 	if bestNode.GroupID > 0 {
 		groupIDStr = fmt.Sprintf("%d", bestNode.GroupID)
+	}
+
+	gameConfig := map[string]interface{}{
+		"confuse":            7,
+		"enableProxyModeDNS": false,
+		"enableUdpTunnel":    true,
+		"log_level":          "DEBUG",
+		"nat_open":           false,
+	}
+	if acctDetail != nil && acctDetail.CustomConfig != nil {
+		if gc, ok := acctDetail.CustomConfig["qyproxy_game_config"].(map[string]interface{}); ok {
+			for k, v := range gc {
+				gameConfig[k] = v
+			}
+			// For PC games connecting directly by IP rather than DNS fake-IP,
+			// enableProxyModeDNS MUST be false so lwIP does not drop direct IP sessions.
+			gameConfig["enableProxyModeDNS"] = false
+		}
 	}
 
 	// Construct QyProxy tunnel configuration
@@ -305,7 +373,7 @@ func (s *PluginService) Connect(connection map[string]map[string]dbus.Variant) *
 				},
 			},
 			"routing": map[string]interface{}{
-				"defaultOutTag": "proxy",
+				"defaultOutTag": zoneFlag,
 				"rules":         []interface{}{},
 			},
 		},
@@ -313,13 +381,7 @@ func (s *PluginService) Connect(connection map[string]map[string]dbus.Variant) *
 			"qyproxy_config": map[string]interface{}{
 				"game_area": zoneFlag,
 			},
-			"qyproxy_game_config": map[string]interface{}{
-				"confuse":            7,
-				"enableProxyModeDNS": false,
-				"enableUdpTunnel":    true,
-				"log_level":          "DEBUG",
-				"nat_open":           false,
-			},
+			"qyproxy_game_config": gameConfig,
 		},
 	}
 
@@ -365,9 +427,14 @@ func (s *PluginService) Connect(connection map[string]map[string]dbus.Variant) *
 			combinedCIDRs = append(combinedCIDRs, c)
 		}
 	}
+	nodeIPParsed := net.ParseIP(nodeIP)
 	for _, cidr := range combinedCIDRs {
 		ip, ipnet, err := net.ParseCIDR(cidr)
 		if err != nil {
+			continue
+		}
+		if nodeIPParsed != nil && ipnet.Contains(nodeIPParsed) {
+			log.Printf("[NM-LagoFast] Excluding subnet %s containing relay node %s to avoid routing loop", cidr, nodeIP)
 			continue
 		}
 		ones, _ := ipnet.Mask.Size()
@@ -382,7 +449,7 @@ func (s *PluginService) Connect(connection map[string]map[string]dbus.Variant) *
 	ip4Config := map[string]dbus.Variant{
 		"tundev":        dbus.MakeVariant(tunDev.Name),
 		"internal-ip4":  dbus.MakeVariant(ipToUint32(localIP)),
-		"external-ip4":  dbus.MakeVariant(ipToUint32(gatewayIP)),
+		"external-ip4":  dbus.MakeVariant(ipToUint32(net.ParseIP(nodeIP))),
 		"address":       dbus.MakeVariant(ipToUint32(localIP)),
 		"prefix":        dbus.MakeVariant(uint32(24)),
 		"gateway":       dbus.MakeVariant(ipToUint32(gatewayIP)),
@@ -415,8 +482,17 @@ func (s *PluginService) Disconnect() *dbus.Error {
 		s.tunDev = nil
 	}
 
+	if s.routeCleanup != nil {
+		s.routeCleanup()
+		s.routeCleanup = nil
+	}
+
 	s.setState(StateStopped)
 	log.Printf("[NM-LagoFast] Disconnected cleanly")
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		os.Exit(0)
+	}()
 	return nil
 }
 

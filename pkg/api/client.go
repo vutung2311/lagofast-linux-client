@@ -458,7 +458,17 @@ func (c *Client) SelectOptimalNode(gameID int) (*model.NodeItem, time.Duration, 
 			defer func() { <-sem }()
 
 			rtt, err := PingNode(node.NodeIP, node.Port, 600*time.Millisecond)
-			results <- pingResult{node: node, rtt: rtt, err: err}
+			if err != nil {
+				results <- pingResult{node: node, rtt: 0, err: err}
+				return
+			}
+			tcpConn, tcpErr := net.DialTimeout("tcp", fmt.Sprintf("%s:2080", node.NodeIP), 600*time.Millisecond)
+			if tcpErr != nil {
+				results <- pingResult{node: node, rtt: 0, err: tcpErr}
+				return
+			}
+			tcpConn.Close()
+			results <- pingResult{node: node, rtt: rtt, err: nil}
 		}(n)
 	}
 
@@ -630,18 +640,13 @@ func (c *Client) GetGameRoutingSubnets(gameID, zoneID int) ([]string, error) {
 	c.extractZonePingIPs(gameID, zoneID, addSubnet)
 
 	acctDetail, err := c.GetAcctDetailAll(gameID, zoneID)
-	if err == nil && acctDetail != nil {
+	if err != nil || acctDetail == nil {
+		// No additional delay detect zones available
+	} else {
 		for _, pz := range acctDetail.DelayDetectPingZones {
 			for _, ip := range pz.DetectionIP {
 				addSubnet(ip)
 			}
-		}
-	}
-
-	nodes, err := c.GetGameNodes(gameID)
-	if err == nil {
-		for _, n := range nodes {
-			addSubnet(n.NodeIP)
 		}
 	}
 

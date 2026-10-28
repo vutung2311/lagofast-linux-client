@@ -73,14 +73,13 @@ func TestHashPassword(t *testing.T) {
 	}
 }
 
-func TestGetGameRoutingSubnets(t *testing.T) {
+func TestSelectOptimalNode(t *testing.T) {
 	client := NewClient("")
-	subnets, err := client.GetGameRoutingSubnets(54758, 45983)
+	client.SetToken("20261021200403000000000001114692_f4331fdf0b3343d087b9", "20261021200403000000000001114692")
+	node, rtt, err := client.SelectOptimalNode(54758)
 	if err != nil {
-		t.Fatalf("GetGameRoutingSubnets failed: %v", err)
+		t.Fatalf("SelectOptimalNode failed: %v", err)
 	}
-	if len(subnets) == 0 {
-		t.Errorf("Expected non-empty subnets list, got 0")
-	}
-	t.Logf("Discovered %d subnets dynamically: %v", len(subnets), subnets)
+	t.Logf("Selected node: %s (%s:%d), RTT: %v, GroupID: %d", node.NodeName, node.NodeIP, node.Port, rtt, node.GroupID)
 }
+

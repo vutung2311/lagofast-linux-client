@@ -287,7 +287,7 @@ func main() {
 					},
 				},
 				"routing": map[string]interface{}{
-					"defaultOutTag": "proxy",
+					"defaultOutTag": zoneFlag,
 					"rules":         []interface{}{},
 				},
 			},
@@ -297,7 +297,7 @@ func main() {
 				},
 				"qyproxy_game_config": map[string]interface{}{
 					"confuse":            7,
-					"enableProxyModeDNS": true,
+					"enableProxyModeDNS": false,
 					"enableUdpTunnel":    true,
 					"log_level":          "DEBUG",
 					"nat_open":           false,

@@ -20,6 +20,15 @@ type Engine struct {
 
 var DefaultEngine = &Engine{}
 
+func (e *Engine) SetBindInterface(iface string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	cIface := C.CString(iface)
+	defer C.free(unsafe.Pointer(cIface))
+	C.qyproxy_set_bind_interface(cIface)
+}
+
 func (e *Engine) Init(libDir string) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()

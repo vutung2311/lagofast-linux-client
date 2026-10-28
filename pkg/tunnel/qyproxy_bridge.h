@@ -5,6 +5,9 @@
 extern "C" {
 #endif
 
+// Set the physical interface to bind protected tunnel sockets (e.g. "wlan0", "eth0").
+void qyproxy_set_bind_interface(const char* iface);
+
 // Initialize the QyProxy native bridge by loading liblog.so, libproxy.so, libqyproxy-lib.so.
 // If lib_dir is NULL or empty, default locations will be searched.
 // Returns 0 on success, or non-zero error code.
