@@ -90,15 +90,18 @@ func NewPluginService() (*PluginService, error) {
 
 func (s *PluginService) setState(state uint32) {
 	s.state = state
-	err := s.conn.Emit(DBusObjectPath, DBusInterface+".StateChange", state)
-	if err != nil {
-		log.Printf("[D-Bus] Error emitting StateChange(%d): %v", state, err)
+	err1 := s.conn.Emit(DBusObjectPath, DBusInterface+".StateChanged", state)
+	err2 := s.conn.Emit(DBusObjectPath, DBusInterface+".StateChange", state)
+	if err1 != nil && err2 != nil {
+		log.Printf("[D-Bus] Error emitting StateChanged/StateChange(%d): %v / %v", state, err1, err2)
 	}
 }
 
 func (s *PluginService) emitFailure(reason uint32) {
 	s.setState(StateStopped)
-	s.conn.Emit(DBusObjectPath, DBusInterface+".Failure", reason)
+	if err := s.conn.Emit(DBusObjectPath, DBusInterface+".Failure", reason); err != nil {
+		log.Printf("[D-Bus] Error emitting Failure(%d): %v", reason, err)
+	}
 }
 
 // NeedSecrets is invoked by NetworkManager to determine if credentials are required
@@ -461,10 +464,19 @@ func (s *PluginService) Connect(connection map[string]map[string]dbus.Variant) *
 		"routes":        dbus.MakeVariant(routesList),
 	}
 
-	log.Printf("[NM-LagoFast] Emitting IP4Config on device %s", tunDev.Name)
-	err = s.conn.Emit(DBusObjectPath, DBusInterface+".IP4Config", ip4Config)
-	if err != nil {
-		log.Printf("[NM-LagoFast] Error emitting IP4Config: %v", err)
+	log.Printf("[NM-LagoFast] Emitting Ip4Config on device %s", tunDev.Name)
+	err1 := s.conn.Emit(DBusObjectPath, DBusInterface+".Ip4Config", ip4Config)
+	err2 := s.conn.Emit(DBusObjectPath, DBusInterface+".IP4Config", ip4Config)
+	if err1 != nil {
+		log.Printf("[NM-LagoFast] Notice emitting Ip4Config: %v", err1)
+	}
+	if err2 != nil {
+		log.Printf("[NM-LagoFast] Notice emitting IP4Config: %v", err2)
+	}
+	if err1 != nil && err2 != nil {
+		log.Printf("[NM-LagoFast] Error: failed to emit Ip4Config to NetworkManager: %v / %v", err1, err2)
+		s.emitFailure(ErrorConfigFailed)
+		return dbus.NewError("org.freedesktop.NetworkManager.VPN.Error.ConfigFailed", []interface{}{fmt.Sprintf("failed to emit Ip4Config to NetworkManager: %v", err1)})
 	}
 
 	s.setState(StateStarted)
