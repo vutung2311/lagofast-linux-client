@@ -60,6 +60,10 @@ pkexec bash -c "
   install -m 644 '$ROOT_DIR/config/nm-lagofast-service.name' /usr/lib/NetworkManager/VPN/nm-lagofast-service.name
   install -m 644 '$ROOT_DIR/config/org.freedesktop.NetworkManager.lagofast.conf' /etc/dbus-1/system.d/org.freedesktop.NetworkManager.lagofast.conf
 
+  # Install NetworkManager vendor drop-in to prevent NM from assuming virtual VPN TUN devices
+  mkdir -p /usr/lib/NetworkManager/conf.d
+  install -m 644 '$ROOT_DIR/config/nm-lagofast.conf' /usr/lib/NetworkManager/conf.d/nm-lagofast.conf
+
   # Install KDE Plasma NM UI Plugin if built
   if [ -f '$ROOT_DIR/plasma-plugin/plasmanetworkmanagement_lagofastui.so' ]; then
     mkdir -p /usr/lib/qt6/plugins/plasma/network/vpn

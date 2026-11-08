@@ -25,14 +25,14 @@ const (
 	DBusObjectPath = "/org/freedesktop/NetworkManager/VPN/Plugin"
 	DBusService   = "org.freedesktop.NetworkManager.lagofast"
 
-	// NetworkManager VPN Service States
-	StateUnknown     uint32 = 0
-	StateInit        uint32 = 1
-	StateStarting    uint32 = 2
-	StateConfiguring uint32 = 3
-	StateStarted     uint32 = 4
-	StateStopping    uint32 = 5
-	StateStopped     uint32 = 6
+	// NetworkManager VPN Service States (matching NMVpnServiceState in libnm)
+	StateUnknown  uint32 = 0
+	StateInit     uint32 = 1
+	StateShutdown uint32 = 2
+	StateStarting uint32 = 3
+	StateStarted  uint32 = 4
+	StateStopping uint32 = 5
+	StateStopped  uint32 = 6
 
 	// NetworkManager VPN Errors
 	ErrorNone                   uint32 = 0
@@ -90,9 +90,9 @@ func NewPluginService() (*PluginService, error) {
 
 func (s *PluginService) setState(state uint32) {
 	s.state = state
-	err := s.conn.Emit(DBusObjectPath, DBusInterface+".StateChanged", state)
+	err := s.conn.Emit(DBusObjectPath, DBusInterface+".StateChange", state)
 	if err != nil {
-		log.Printf("[D-Bus] Error emitting StateChanged(%d): %v", state, err)
+		log.Printf("[D-Bus] Error emitting StateChange(%d): %v", state, err)
 	}
 }
 
@@ -205,8 +205,6 @@ func (s *PluginService) Connect(connection map[string]map[string]dbus.Variant) *
 		s.apiClient.SetToken(session.Token, session.UID)
 		log.Printf("[NM-LagoFast] Loaded active saved session for account %s (UID: %s)", session.Account, session.UID)
 	}
-
-	s.setState(StateConfiguring)
 
 	gameID := 54758
 	if gameIDStr != "" {
@@ -463,10 +461,10 @@ func (s *PluginService) Connect(connection map[string]map[string]dbus.Variant) *
 		"routes":        dbus.MakeVariant(routesList),
 	}
 
-	log.Printf("[NM-LagoFast] Emitting Ip4Config on device %s", tunDev.Name)
-	err = s.conn.Emit(DBusObjectPath, DBusInterface+".Ip4Config", ip4Config)
+	log.Printf("[NM-LagoFast] Emitting IP4Config on device %s", tunDev.Name)
+	err = s.conn.Emit(DBusObjectPath, DBusInterface+".IP4Config", ip4Config)
 	if err != nil {
-		log.Printf("[NM-LagoFast] Error emitting Ip4Config: %v", err)
+		log.Printf("[NM-LagoFast] Error emitting IP4Config: %v", err)
 	}
 
 	s.setState(StateStarted)
