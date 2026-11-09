@@ -12,7 +12,7 @@ import (
 
 const (
 	DefaultTunName = "lagofast0"
-	DefaultMTU     = 1400
+	DefaultMTU     = 1500
 )
 
 type ifreq struct {

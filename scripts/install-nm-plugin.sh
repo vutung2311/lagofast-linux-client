@@ -38,7 +38,8 @@ pkexec bash -c "
   mkdir -p /usr/local/bin
   mkdir -p /usr/local/lib
 
-  install -m 755 '$ROOT_DIR/bin/nm-lagofast-service' /usr/local/bin/nm-lagofast-service
+  install -m 755 '$ROOT_DIR/bin/nm-lagofast-service' /usr/lib/nm-lagofast-service
+  ln -sf /usr/lib/nm-lagofast-service /usr/local/bin/nm-lagofast-service
   install -m 755 '$ROOT_DIR/bin/lagofast' /usr/local/bin/lagofast
   if [ -f '$ROOT_DIR/bin/liblagofast_bind.so' ]; then
     install -m 755 '$ROOT_DIR/bin/liblagofast_bind.so' /usr/local/lib/liblagofast_bind.so

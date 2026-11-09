@@ -413,7 +413,8 @@ func (s *PluginService) Connect(connection map[string]map[string]dbus.Variant) *
 
 	// Assign local IP (negotiated with QyProxy gateway)
 	localIP := net.ParseIP("10.10.10.2")
-	gatewayIP := net.ParseIP("10.10.10.1")
+	mask := net.CIDRMask(24, 32)
+	_ = tunDev.SetIP(localIP, mask)
 	dnsIP := net.ParseIP("8.8.8.8")
 
 	// Assemble Subnet / CIDR routes dynamically from LagoFast REST API
@@ -446,7 +447,7 @@ func (s *PluginService) Connect(connection map[string]map[string]dbus.Variant) *
 		routesList = append(routesList, []uint32{
 			ipToUint32(ip),
 			uint32(ones),
-			ipToUint32(gatewayIP),
+			0, // Direct on-link route via tunDev without next-hop gateway
 			uint32(50),
 		})
 	}
@@ -454,12 +455,12 @@ func (s *PluginService) Connect(connection map[string]map[string]dbus.Variant) *
 	ip4Config := map[string]dbus.Variant{
 		"tundev":        dbus.MakeVariant(tunDev.Name),
 		"internal-ip4":  dbus.MakeVariant(ipToUint32(localIP)),
-		"external-ip4":  dbus.MakeVariant(ipToUint32(net.ParseIP(nodeIP))),
+		"external-ip4":  dbus.MakeVariant(ipToUint32(nodeIPParsed)),
 		"address":       dbus.MakeVariant(ipToUint32(localIP)),
 		"prefix":        dbus.MakeVariant(uint32(24)),
-		"gateway":       dbus.MakeVariant(ipToUint32(gatewayIP)),
+		"gateway":       dbus.MakeVariant(ipToUint32(nodeIPParsed)), // Set remote relay node as VPN gateway
 		"dns":           dbus.MakeVariant([]uint32{ipToUint32(dnsIP)}),
-		"mtu":           dbus.MakeVariant(uint32(1400)),
+		"mtu":           dbus.MakeVariant(uint32(tunnel.DefaultMTU)),
 		"never-default": dbus.MakeVariant(true),
 		"routes":        dbus.MakeVariant(routesList),
 	}
