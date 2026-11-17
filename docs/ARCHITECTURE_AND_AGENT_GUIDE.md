@@ -41,7 +41,7 @@ flowchart TD
     Daemon -->|Kernel Route Bypass| Bypass["Add /32 Host Routes via wlan0/eth0\n(Prevents Relay Loops)"]
 
     Daemon -->|Initialize FFI / Cgo| Native["native/libQyProxy.so\n(Proprietary Tunnel Core)"]
-    Native -->|TUN Read/Write| Tun["Linux TUN Interface: lagofast0\n(MTU 1400, Peer 10.10.10.1)"]
+    Native -->|TUN Read/Write| Tun["Linux TUN Interface: lagofast0\n(MTU 1500, Peer 10.10.10.1)"]
 
     Tun -->|Split-Tunnel CIDRs| KernelRoutes["Kernel Routing Table\n(Game Server Subnets)"]
 
@@ -78,7 +78,7 @@ flowchart TD
 - **Location:** `native/libQyProxy.so`
 - **Origin:** Extracted and reverse-engineered from the proprietary LagoFast Android and macOS clients.
 - **Interface:** C-ABI dynamic loading via `dlopen`/`dlsym`. Handled in [`pkg/tunnel/cgo.go`](file:///home/tung/Git/lagofast_vpn/pkg/tunnel).
-- **MTU:** Fixed to **1400** to account for encapsulation overhead over standard 1500-byte WAN MTU without IP packet fragmentation.
+- **MTU:** **1500** (`tunnel.DefaultMTU`), applied to the kernel by `OpenTun` via `SIOCSIFMTU` and reported to NetworkManager from `Device.MTU`, so both always agree. 1400 was tried earlier but truncated large game state snapshots (see commit `5d24507`). With `enableLwip`, the engine terminates TCP in userspace, so the inner MTU does not map 1:1 onto the encapsulated WAN packet size.
 
 ### D. Socket Interposer (`pkg/bind/bind.c` -> `liblagofast_bind.so`)
 - **Location:** [`pkg/bind/bind.c`](file:///home/tung/Git/lagofast_vpn/pkg/bind/bind.c)

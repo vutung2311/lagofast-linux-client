@@ -27,7 +27,7 @@ A native Linux client and NetworkManager VPN plugin for **LagoFast / Qiyou Game 
 │                                                            │
 │  ┌───────────────────────┐      ┌───────────────────────┐  │
 │  │     pkg/api Client    │      │    pkg/tunnel (TUN)   │  │
-│  │   (LagoFast REST API) │      │   (/dev/net/tun 1400) │  │
+│  │   (LagoFast REST API) │      │   (/dev/net/tun 1500) │  │
 │  └───────────┬───────────┘      └───────────┬───────────┘  │
 └──────────────┼──────────────────────────────┼──────────────┘
                │                              │

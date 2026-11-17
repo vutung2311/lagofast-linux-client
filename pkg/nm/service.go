@@ -359,7 +359,7 @@ func (s *PluginService) Connect(connection map[string]map[string]dbus.Variant) *
 	}
 
 	// Create TUN interface
-	tunDev, err := tunnel.OpenTun("lagofast0", 1400)
+	tunDev, err := tunnel.OpenTun("lagofast0", tunnel.DefaultMTU)
 	if err != nil {
 		log.Printf("[NM-LagoFast] Failed to create TUN: %v", err)
 		s.emitFailure(ErrorDeviceFailed)
@@ -515,7 +515,7 @@ func (s *PluginService) Connect(connection map[string]map[string]dbus.Variant) *
 		"prefix":        dbus.MakeVariant(uint32(24)),
 		"gateway":       dbus.MakeVariant(ipToUint32(nodeIPParsed)), // Set remote relay node as VPN gateway
 		"dns":           dbus.MakeVariant([]uint32{ipToUint32(dnsIP)}),
-		"mtu":           dbus.MakeVariant(uint32(tunnel.DefaultMTU)),
+		"mtu":           dbus.MakeVariant(uint32(tunDev.MTU)),
 		"never-default": dbus.MakeVariant(true),
 		"routes":        dbus.MakeVariant(routesList),
 	}

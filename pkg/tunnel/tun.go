@@ -63,6 +63,11 @@ func OpenTun(name string, mtu int) (*Device, error) {
 		MTU:  mtu,
 	}
 
+	if err := dev.SetMTU(mtu); err != nil {
+		dev.Close()
+		return nil, err
+	}
+
 	// Optimize transmit queue length for lower packet drop under gaming bursts
 	_ = dev.SetTxQueueLen(1000)
 
@@ -91,6 +96,33 @@ func (d *Device) SetTxQueueLen(qlen int) error {
 	if errno != 0 {
 		return fmt.Errorf("ioctl SIOCSIFTXQLEN failed: %w", errno)
 	}
+	return nil
+}
+
+// SetMTU applies the MTU to the kernel interface. Without this the requested
+// value was only recorded on the struct and the interface stayed at the kernel
+// default, so callers and NetworkManager could disagree about the real MTU.
+func (d *Device) SetMTU(mtu int) error {
+	s, err := unix.Socket(unix.AF_INET, unix.SOCK_DGRAM, 0)
+	if err != nil {
+		return err
+	}
+	defer unix.Close(s)
+
+	var req ifreq
+	copy(req.Name[:], []byte(d.Name))
+	*(*int32)(unsafe.Pointer(&req.Data[0])) = int32(mtu)
+
+	_, _, errno := unix.Syscall(
+		unix.SYS_IOCTL,
+		uintptr(s),
+		uintptr(unix.SIOCSIFMTU),
+		uintptr(unsafe.Pointer(&req)),
+	)
+	if errno != 0 {
+		return fmt.Errorf("ioctl SIOCSIFMTU(%d) failed: %w", mtu, errno)
+	}
+	d.MTU = mtu
 	return nil
 }
 

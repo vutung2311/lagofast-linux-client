@@ -1,6 +1,7 @@
 package tunnel
 
 import (
+	"net"
 	"os"
 	"testing"
 )
@@ -14,7 +15,7 @@ func TestBytesTrimRight(t *testing.T) {
 }
 
 func TestOpenTun_Permissions(t *testing.T) {
-	dev, err := OpenTun("lagotest0", 1400)
+	dev, err := OpenTun("lagotest0", DefaultMTU)
 	if err != nil {
 		if os.IsPermission(err) || os.Geteuid() != 0 {
 			t.Logf("Expected permission error when non-root: %v", err)
@@ -26,5 +27,24 @@ func TestOpenTun_Permissions(t *testing.T) {
 
 	if dev.Name != "lagotest0" {
 		t.Errorf("Expected device name lagotest0, got %s", dev.Name)
+	}
+}
+
+// Regression: OpenTun used to record the MTU without applying it, leaving the
+// interface at the kernel default. Run as root, or unprivileged via
+// `unshare -rn go test ./pkg/tunnel`.
+func TestOpenTun_AppliesMTU(t *testing.T) {
+	dev, err := OpenTun("lagomtu0", 1280)
+	if err != nil {
+		t.Skipf("cannot create TUN here: %v", err)
+	}
+	defer dev.Close()
+
+	iface, err := net.InterfaceByName(dev.Name)
+	if err != nil {
+		t.Fatalf("InterfaceByName: %v", err)
+	}
+	if iface.MTU != 1280 || dev.MTU != 1280 {
+		t.Fatalf("expected MTU 1280, kernel=%d struct=%d", iface.MTU, dev.MTU)
 	}
 }

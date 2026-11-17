@@ -251,7 +251,7 @@ func main() {
 		}
 
 		fmt.Printf("Initializing LagoFast tunnel on %s for Game ID %d...\n", *tunName, *gameID)
-		dev, err := tunnel.OpenTun(*tunName, 1400)
+		dev, err := tunnel.OpenTun(*tunName, tunnel.DefaultMTU)
 		if err != nil {
 			fmt.Printf("Failed to open TUN device: %v (Note: requires root/CAP_NET_ADMIN)\n", err)
 			return
