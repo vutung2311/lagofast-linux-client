@@ -325,7 +325,6 @@ func (s *PluginService) Connect(connection map[string]map[string]dbus.Variant) *
 		"confuse":            7,
 		"enableProxyModeDNS": false,
 		"enableUdpTunnel":    true,
-		"log_level":          "DEBUG",
 		"nat_open":           false,
 	}
 	if acctDetail != nil && acctDetail.CustomConfig != nil {
@@ -338,6 +337,10 @@ func (s *PluginService) Connect(connection map[string]map[string]dbus.Variant) *
 			gameConfig["enableProxyModeDNS"] = false
 		}
 	}
+	// DEBUG logging makes the native engine write synchronously to stdout from
+	// its packet threads. Pin the level after merging so the server-supplied
+	// config cannot re-enable it; set LAGOFAST_NATIVE_DEBUG=1 to diagnose.
+	gameConfig["log_level"] = tunnel.NativeLogLevel()
 
 	// Construct QyProxy tunnel configuration
 	tunnelConfig := map[string]interface{}{

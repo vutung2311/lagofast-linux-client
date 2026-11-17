@@ -231,6 +231,9 @@ ip route show dev lagofast0 | head -n 15
 ip route get 150.109.94.71
 ```
 
+### Native Engine Debug Logging
+The QyProxy engine runs at `log_level: INFO`, and `liblog.so` drops Android priorities below INFO. DEBUG output is written synchronously from the engine's packet threads, so it is opt-in: set `LAGOFAST_NATIVE_DEBUG=1` in the service environment to enable both.
+
 ### 2. Inspect Connection Logs
 ```bash
 # Check node benchmark scoring and selection

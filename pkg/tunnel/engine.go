@@ -10,9 +10,20 @@ import "C"
 import (
 	"errors"
 	"fmt"
+	"os"
 	"sync"
 	"unsafe"
 )
+
+// NativeLogLevel is the log_level passed to the QyProxy engine. DEBUG makes the
+// engine write synchronously from its packet threads, so it is opt-in via
+// LAGOFAST_NATIVE_DEBUG=1 (which also lifts the liblog.so priority filter).
+func NativeLogLevel() string {
+	if v := os.Getenv("LAGOFAST_NATIVE_DEBUG"); v != "" && v != "0" {
+		return "DEBUG"
+	}
+	return "INFO"
+}
 
 type Engine struct {
 	mu sync.Mutex

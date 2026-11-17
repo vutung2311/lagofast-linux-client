@@ -11,11 +11,29 @@
 #include <dlfcn.h>
 #include <pthread.h>
 
+/* Android log priorities: VERBOSE=2, DEBUG=3, INFO=4, WARN=5, ERROR=6, FATAL=7.
+ * Messages below INFO are dropped unless LAGOFAST_NATIVE_DEBUG is set, so a
+ * chatty native engine cannot stall its packet threads on stderr writes. */
+#define LAGO_LOG_INFO 4
+static int g_min_prio = -1;
+
+static int min_log_prio(void) {
+    int p = __atomic_load_n(&g_min_prio, __ATOMIC_RELAXED);
+    if (p < 0) {
+        const char *dbg = getenv("LAGOFAST_NATIVE_DEBUG");
+        p = (dbg && dbg[0] && dbg[0] != '0') ? 0 : LAGO_LOG_INFO;
+        __atomic_store_n(&g_min_prio, p, __ATOMIC_RELAXED);
+    }
+    return p;
+}
+
 int __android_log_write(int prio, const char *tag, const char *text) {
+    if (prio < min_log_prio()) return 0;
     return fprintf(stderr, "[%s] %s\n", tag ? tag : "LAGO", text ? text : "");
 }
 
 int __android_log_print(int prio, const char *tag, const char *fmt, ...) {
+    if (prio < min_log_prio()) return 0;
     va_list ap;
     va_start(ap, fmt);
     fprintf(stderr, "[%s] ", tag ? tag : "LAGO");

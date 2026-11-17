@@ -312,7 +312,7 @@ func main() {
 					"confuse":            7,
 					"enableProxyModeDNS": false,
 					"enableUdpTunnel":    true,
-					"log_level":          "DEBUG",
+					"log_level":          tunnel.NativeLogLevel(),
 					"nat_open":           false,
 				},
 			},
