@@ -31,6 +31,59 @@ type Client struct {
 	Token      string
 	Account    string
 	UID        string
+
+	memoMu sync.Mutex
+	memo   map[string]*memoEntry
+}
+
+// memoTTL bounds how long per-user API responses are reused. A single connect
+// needs the same node list and acct_detail_all response several times within
+// a few seconds; anything older is refetched.
+const memoTTL = 60 * time.Second
+
+type memoEntry struct {
+	done chan struct{}
+	val  interface{}
+	err  error
+	at   time.Time
+}
+
+// memoize returns a cached result for key, shares one in-flight request between
+// concurrent callers, and never caches errors.
+func (c *Client) memoize(key string, fn func() (interface{}, error)) (interface{}, error) {
+	c.memoMu.Lock()
+	if c.memo == nil {
+		c.memo = make(map[string]*memoEntry)
+	}
+	if e, ok := c.memo[key]; ok {
+		select {
+		case <-e.done:
+			if e.err == nil && time.Since(e.at) < memoTTL {
+				c.memoMu.Unlock()
+				return e.val, nil
+			}
+		default:
+			c.memoMu.Unlock()
+			<-e.done
+			return e.val, e.err
+		}
+	}
+	e := &memoEntry{done: make(chan struct{})}
+	c.memo[key] = e
+	c.memoMu.Unlock()
+
+	e.val, e.err = fn()
+	e.at = time.Now()
+	close(e.done)
+
+	if e.err != nil {
+		c.memoMu.Lock()
+		if c.memo[key] == e {
+			delete(c.memo, key)
+		}
+		c.memoMu.Unlock()
+	}
+	return e.val, e.err
 }
 
 func NewClient(baseURL string) *Client {
@@ -48,6 +101,9 @@ func NewClient(baseURL string) *Client {
 func (c *Client) SetToken(token, uid string) {
 	c.Token = token
 	c.UID = uid
+	c.memoMu.Lock()
+	c.memo = nil
+	c.memoMu.Unlock()
 }
 
 func (c *Client) doRequest(method, path string, query url.Values, body interface{}) ([]byte, error) {
@@ -428,8 +484,17 @@ func PingNode(ip string, port int, timeout time.Duration) (time.Duration, error)
 	return rtt, nil
 }
 
-// GetGameNodesForZone queries candidate nodes specifically for the target zone
+// GetGameNodesForZone queries candidate nodes specifically for the target zone.
+// Results are memoized (see memoTTL); callers must not modify the returned slice.
 func (c *Client) GetGameNodesForZone(gameID, zoneID int) ([]model.NodeItem, error) {
+	v, err := c.memoize(fmt.Sprintf("nodes/%d/%d", gameID, zoneID), func() (interface{}, error) {
+		return c.fetchGameNodesForZone(gameID, zoneID)
+	})
+	nodes, _ := v.([]model.NodeItem)
+	return nodes, err
+}
+
+func (c *Client) fetchGameNodesForZone(gameID, zoneID int) ([]model.NodeItem, error) {
 	if zoneID <= 0 {
 		return c.GetGameNodes(gameID)
 	}
@@ -662,8 +727,17 @@ func DecryptAcctPassword(uid, encHex string) (string, error) {
 	return string(clean), nil
 }
 
-// GetAcctDetailAll retrieves acceleration credentials and parameters for a specific game and zone
+// GetAcctDetailAll retrieves acceleration credentials and parameters for a specific game and zone.
+// Results are memoized (see memoTTL); callers must not modify the returned value.
 func (c *Client) GetAcctDetailAll(gameID, zoneID int) (*model.AcctDetailAllResponse, error) {
+	v, err := c.memoize(fmt.Sprintf("acct/%d/%d", gameID, zoneID), func() (interface{}, error) {
+		return c.fetchAcctDetailAll(gameID, zoneID)
+	})
+	detail, _ := v.(*model.AcctDetailAllResponse)
+	return detail, err
+}
+
+func (c *Client) fetchAcctDetailAll(gameID, zoneID int) (*model.AcctDetailAllResponse, error) {
 	q := url.Values{}
 	q.Set("app_no", fmt.Sprintf("%d", gameID))
 	q.Set("accelerate_object_no", fmt.Sprintf("%d", zoneID))
@@ -780,19 +854,33 @@ func (c *Client) GetGameRoutingSubnets(gameID, zoneID int) ([]string, error) {
 		}
 	}
 
-	c.extractZonePingIPs(gameID, zoneID, addSubnet)
+	// The three sources are independent; fetch them concurrently and merge.
+	var (
+		wg         sync.WaitGroup
+		pingIPs    []string
+		nodes      []model.NodeItem
+		acctDetail *model.AcctDetailAllResponse
+	)
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		c.extractZonePingIPs(gameID, zoneID, func(ip string) { pingIPs = append(pingIPs, ip) })
+	}()
+	go func() {
+		defer wg.Done()
+		nodes, _ = c.GetGameNodesForZone(gameID, zoneID)
+	}()
+	go func() {
+		defer wg.Done()
+		acctDetail, _ = c.GetAcctDetailAll(gameID, zoneID)
+	}()
+	wg.Wait()
 
-	nodes, nodeErr := c.GetGameNodesForZone(gameID, zoneID)
-	if nodeErr != nil {
-		nodes = nil
+	for _, ip := range pingIPs {
+		addSubnet(ip)
 	}
 	for _, n := range nodes {
 		addSubnet(n.NodeIP)
-	}
-
-	acctDetail, detailErr := c.GetAcctDetailAll(gameID, zoneID)
-	if detailErr != nil {
-		acctDetail = nil
 	}
 	if acctDetail != nil {
 		for _, pz := range acctDetail.DelayDetectPingZones {

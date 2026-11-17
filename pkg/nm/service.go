@@ -229,6 +229,28 @@ func (s *PluginService) Connect(connection map[string]map[string]dbus.Variant) *
 		}
 	}
 
+	// None of these depend on which node wins the benchmark, so start them now
+	// and let the HTTPS round trips overlap the ~3 s UDP probe phase. The client
+	// memoizes and de-duplicates the shared node list / acct_detail_all calls.
+	type acctResult struct {
+		detail *model.AcctDetailAllResponse
+		err    error
+	}
+	type subnetResult struct {
+		cidrs []string
+		err   error
+	}
+	acctCh := make(chan acctResult, 1)
+	subnetCh := make(chan subnetResult, 1)
+	go func() {
+		d, err := s.apiClient.GetAcctDetailAll(gameID, zoneID)
+		acctCh <- acctResult{d, err}
+	}()
+	go func() {
+		c, err := s.apiClient.GetGameRoutingSubnets(gameID, zoneID)
+		subnetCh <- subnetResult{c, err}
+	}()
+
 	explicitNodeIP, _ := vpnData["node_ip"].Value().(string)
 	if explicitNodeIP != "" && explicitNodeIP != "auto" {
 		log.Printf("[NM-LagoFast] Using explicit node IP from settings: %s", explicitNodeIP)
@@ -289,7 +311,8 @@ func (s *PluginService) Connect(connection map[string]map[string]dbus.Variant) *
 	plainPwd := "tposwy"
 	zoneFlag := "sg"
 
-	acctDetail, detailErr := s.apiClient.GetAcctDetailAll(gameID, zoneID)
+	acctRes := <-acctCh
+	acctDetail, detailErr := acctRes.detail, acctRes.err
 	if detailErr != nil {
 		log.Printf("[NM-LagoFast] Warning: GetAcctDetailAll failed (%v), using default credentials", detailErr)
 	} else {
@@ -422,7 +445,8 @@ func (s *PluginService) Connect(connection map[string]map[string]dbus.Variant) *
 
 	// Assemble Subnet / CIDR routes dynamically from LagoFast REST API
 	var routesList [][]uint32
-	cidrs, err := s.apiClient.GetGameRoutingSubnets(gameID, zoneID)
+	subnetRes := <-subnetCh
+	cidrs, err := subnetRes.cidrs, subnetRes.err
 	if err != nil {
 		log.Printf("[NM-LagoFast] Dynamic routing subnets lookup failed: %v", err)
 		cidrs = nil
