@@ -508,6 +508,13 @@ func (c *Client) SelectOptimalNode(gameID int) (*model.NodeItem, time.Duration, 
 	return c.benchmarkNodes(nodes)
 }
 
+// durationMs converts to fractional milliseconds. Duration.Milliseconds()
+// truncates, which zeroes sub-millisecond jitter and erases the 1-3 ms gaps
+// that separate competing relay nodes in the same region.
+func durationMs(d time.Duration) float64 {
+	return float64(d) / float64(time.Millisecond)
+}
+
 func (c *Client) benchmarkNodes(nodes []model.NodeItem) (*model.NodeItem, time.Duration, error) {
 	if len(nodes) == 0 {
 		return nil, 0, fmt.Errorf("no candidate nodes found")
@@ -582,7 +589,7 @@ func (c *Client) benchmarkNodes(nodes []model.NodeItem) (*model.NodeItem, time.D
 			jitter := jitterSum / time.Duration(len(samples))
 
 			lossRate := float64(probeCount-len(samples)) / float64(probeCount)
-			score := float64(avgR.Milliseconds()) + 2.5*float64(jitter.Milliseconds()) + (lossRate * 150.0)
+			score := durationMs(avgR) + 2.5*durationMs(jitter) + (lossRate * 150.0)
 
 			results <- nodeBenchmark{
 				node:     node,
