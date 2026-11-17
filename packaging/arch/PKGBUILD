@@ -1,7 +1,7 @@
 # Maintainer: LagoFast VPN Project
 pkgname=lagofast-vpn
 pkgver=1.0.0
-pkgrel=1
+pkgrel=2
 pkgdesc="Native Linux client & NetworkManager VPN plugin for LagoFast gaming accelerator"
 arch=('x86_64')
 url="https://github.com/lagofast/lagofast-vpn"
@@ -73,6 +73,10 @@ package() {
   # NetworkManager & D-Bus configurations
   install -Dm644 "$_root/config/nm-lagofast-service.name" "$pkgdir/usr/lib/NetworkManager/VPN/nm-lagofast-service.name"
   install -Dm644 "$_root/config/org.freedesktop.NetworkManager.lagofast.conf" "$pkgdir/usr/share/dbus-1/system.d/org.freedesktop.NetworkManager.lagofast.conf"
+
+  # Keep NetworkManager from managing lagofast* TUN devices (otherwise it can
+  # attach its own config to the tunnel and capture the default route).
+  install -Dm644 "$_root/config/nm-lagofast.conf" "$pkgdir/usr/lib/NetworkManager/conf.d/nm-lagofast.conf"
 
   # KDE Plasma NM UI Plugin
   if [ -f "$_root/plasma-plugin/plasmanetworkmanagement_lagofastui.so" ]; then
