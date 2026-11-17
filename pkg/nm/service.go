@@ -154,18 +154,46 @@ func setupBypassRoutes(nodeIP string, bypassCIDRs []string) (func(), error) {
 	}
 
 	tunnel.DefaultEngine.SetBindInterface(dev)
-	exec.Command("ip", "route", "replace", nodeIP+"/32", "via", gw, "dev", dev).Run()
-	for _, cidr := range bypassCIDRs {
-		exec.Command("ip", "route", "replace", cidr, "via", gw, "dev", dev).Run()
-	}
+
+	// One `ip -batch` process per phase instead of one fork/exec per route:
+	// a zone can have dozens of candidate nodes, and connect latency matters.
+	hosts := append([]string{nodeIP + "/32"}, bypassCIDRs...)
+	runIPBatch(routeBatch("replace", hosts, gw, dev))
 
 	cleanup := func() {
-		exec.Command("ip", "route", "del", nodeIP+"/32", "via", gw, "dev", dev).Run()
-		for _, cidr := range bypassCIDRs {
-			exec.Command("ip", "route", "del", cidr, "via", gw, "dev", dev).Run()
-		}
+		runIPBatch(routeBatch("del", hosts, gw, dev))
 	}
 	return cleanup, nil
+}
+
+// routeBatch builds `ip -batch` lines (no leading "ip") for one route verb.
+// Entries are validated here because iproute2 aborts the entire batch on a
+// parse error (even with -force), so one malformed IP from the API would
+// otherwise silently skip every bypass route after it.
+func routeBatch(verb string, cidrs []string, gw, dev string) []string {
+	lines := make([]string, 0, len(cidrs))
+	for _, cidr := range cidrs {
+		if _, _, err := net.ParseCIDR(cidr); err != nil {
+			log.Printf("[NM-LagoFast] Skipping invalid bypass route %q: %v", cidr, err)
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("route %s %s via %s dev %s", verb, cidr, gw, dev))
+	}
+	return lines
+}
+
+// runIPBatch executes all lines in a single `ip` process. -force keeps going
+// past individual failures (e.g. deleting a route that is already gone),
+// matching the previous best-effort per-route behavior.
+func runIPBatch(lines []string) {
+	if len(lines) == 0 {
+		return
+	}
+	cmd := exec.Command("ip", "-force", "-batch", "-")
+	cmd.Stdin = strings.NewReader(strings.Join(lines, "\n") + "\n")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		log.Printf("[NM-LagoFast] ip -batch reported errors (%v): %s", err, strings.TrimSpace(string(out)))
+	}
 }
 
 // Connect is invoked by NetworkManager when initiating a VPN connection
