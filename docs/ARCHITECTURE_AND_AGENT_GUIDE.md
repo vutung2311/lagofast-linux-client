@@ -88,6 +88,8 @@ flowchart TD
   - **Preserves Local & DNS Traffic:** Excludes `127.0.0.1`, `::1`, and UDP port 53 (DNS) to prevent local networking breakdowns.
   - **Includes State Sync Ports (80 & 443):** State synchronization on game subnets (`8.208.0.0/12`, `47.84.0.0/16`, etc.) is bound to `lagofast0` rather than bypassed.
   - **Socket Buffer Expansion:** Automatically enlarges UDP buffers to `SO_RCVBUF = 4MB` and `SO_SNDBUF = 2MB`.
+  - **Hooks both `sendto()` and `sendmsg()`:** Wine's ntdll sends datagrams via `sendmsg()`, so a `sendto()`-only hook never fires for Proton games.
+  - **Configure-once fast path:** socket options are sticky, so each UDP socket is configured on its first remote send and tracked in a per-fd table (reset on `socket()`/`close()`/`dup2()`). Later packets cost one byte load, not 3 syscalls.
   - **Congestion Control Enforcement:** Intercepts `setsockopt` calls requesting suboptimal congestion control (such as DCTCP falling back to Reno) and forces `TCP_CONGESTION = "bbr"`. Enables `TCP_NODELAY` and `TCP_QUICKACK`.
 
 ---
