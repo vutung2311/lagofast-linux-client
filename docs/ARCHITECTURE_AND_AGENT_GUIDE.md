@@ -108,7 +108,7 @@ flowchart TD
 ### Route Table Hygiene
 Never add static diagnostic routes (e.g. `ip route add 47.84.156.0/24 via 192.168.88.1`) without removing them. Linux uses Longest Prefix Match (LPM); a `/24` route on `wlan0` will take precedence over a `/16` route on `lagofast0`, splitting game traffic and breaking multiplayer synchronization.
 
-The package installer script [`packaging/arch/lagofast-vpn.install`](file:///home/tung/Git/lagofast_vpn/packaging/arch/lagofast-vpn.install) automatically purges known leftover diagnostic routes.
+The package installer script [`packaging/arch/lagofast-vpn.install`](file:///home/tung/Git/lagofast_vpn/packaging/arch/lagofast-vpn.install) does **not** delete routes: earlier hard-coded `ip route del` lines also removed live routes owned by other VPN clients (GearUP installs `47.84.154.176` via the physical gateway). Before connecting, check `ip route show | grep -v lagofast0` for host/subnet routes overlapping game CIDRs and remove only ones you know you added.
 
 ---
 

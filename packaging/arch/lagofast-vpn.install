@@ -7,9 +7,9 @@ post_install() {
   rm -rf /usr/local/lib/lagofast
   rm -f /etc/NetworkManager/VPN/nm-lagofast-service.name
 
-  # Purge any stale diagnostic host/subnet routes conflicting with tunnel
-  /usr/bin/ip route del 47.84.156.0/24 2>/dev/null || true
-  /usr/bin/ip route del 47.84.154.176 2>/dev/null || true
+  # No route purging here: hard-coded `ip route del` lines also matched routes
+  # owned by other active VPN clients (e.g. GearUP adds 47.84.154.176 via the
+  # physical gateway). See docs: "Route Table Hygiene" for manual cleanup.
 
   if systemctl is-active --quiet dbus; then
     systemctl reload dbus 2>/dev/null || true
