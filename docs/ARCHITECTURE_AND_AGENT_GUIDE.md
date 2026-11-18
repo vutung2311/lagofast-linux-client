@@ -137,6 +137,19 @@ Implemented in `pkg/api/client.go` (`benchmarkNodes`):
    - The node with the minimum score is selected.
 4. **Speed:** The entire benchmark finishes in **~2.8 seconds**.
 
+### Multi-Hop Dual Links (default on)
+Implemented in [`pkg/api/multihop.go`](file:///home/tung/Git/lagofast_vpn/pkg/api/multihop.go), reverse-engineered from the Android SDK (`QyMultiLinkHop`, `QyUnifiedProcessStrategy`):
+1. `GET /api/accelerate_bff/v1/multi_hop_all_node` -> encrypted list of hop entry candidates (~170 for the mobile profile).
+2. ICMP-probe each candidate (3x, median; unprivileged ping socket, [`pkg/api/icmp.go`](file:///home/tung/Git/lagofast_vpn/pkg/api/icmp.go)).
+3. `POST /api/accelerate_bff/v2/multi_hop_shortest_path` with `crypto_delay_info` -> encrypted `area_nodes` + `replicas_area_nodes` (must be a POST body; a GET query hits nginx 414).
+4. The best path plus a replica path with a *different entry* become top-level `multiLink` entries in the start config; their public hop IPs get `/32` bypass routes.
+
+Crypto: AES-128-ECB, key = first 16 hex chars of `md5("43571366E30F489F")` (SDK `commonAesDesKey`), zero padding, hex. The benchmarked relay stays the control-session `server`; links are added on top, so a planning failure (or 15 s timeout) only loses the extra links. Disable per connection with `multihop=off` in `vpn.data`.
+
+**Measured (2026-11-18, Vietnam -> SG zone):** TLS handshake through the tunnel to zone detection IPs: **~82-88 ms with multi-hop vs ~200-207 ms without**, across different relays; direct control IPs unchanged (~47 ms). The engine logs `multiLink size:2` and `multilink user auth success` (visible with `LAGOFAST_NATIVE_DEBUG=1`).
+
+> NetworkManager passes connection settings nested under `vpn.data` / `vpn.secrets`. Read them with `vpnSetting()`; flat top-level reads silently return nothing (this hid `game_id`/`zone_id`/`node_ip` overrides until 2026-11-18).
+
 ### Relay Topologies: Direct vs Two-Node Backhaul
 - **Direct Singapore Nodes:** (e.g. `Singapore-P1738` `150.109.94.71`, `Singapore-P1739` `43.153.212.197`).
   - Ping from Vietnam: **~31–34 ms**.

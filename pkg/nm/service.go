@@ -295,6 +295,27 @@ func (s *PluginService) Connect(connection map[string]map[string]dbus.Variant) *
 		subnetCh <- subnetResult{c, err}
 	}()
 
+	// Multi-hop: ICMP-probe the zone's hop entry candidates and ask the server
+	// for ranked paths, in parallel with the relay benchmark. The selected
+	// relay stays the control session ("server"); the paths are added as
+	// parallel "multiLink" links, so a failure here only loses the extra links.
+	multiHopEnabled := true
+	if v, ok := vpnSetting(vpnData, "multihop"); ok && (v == "off" || v == "0" || v == "false") {
+		multiHopEnabled = false
+	}
+	mhCh := make(chan *api.MultiHopPlan, 1)
+	if multiHopEnabled && zoneID > 0 {
+		go func() {
+			plan, err := s.apiClient.PlanMultiHop(gameID, zoneID)
+			if err != nil {
+				log.Printf("[NM-LagoFast] Multi-hop unavailable, using single relay: %v", err)
+			}
+			mhCh <- plan
+		}()
+	} else {
+		mhCh <- nil
+	}
+
 	explicitNodeIP, _ := vpnSetting(vpnData, "node_ip")
 	if explicitNodeIP != "" && explicitNodeIP != "auto" {
 		log.Printf("[NM-LagoFast] Using explicit node IP from settings: %s", explicitNodeIP)
@@ -343,6 +364,26 @@ func (s *PluginService) Connect(connection map[string]map[string]dbus.Variant) *
 			}
 		}
 	}
+	var mhPlan *api.MultiHopPlan
+	select {
+	case mhPlan = <-mhCh:
+	case <-time.After(15 * time.Second):
+		log.Printf("[NM-LagoFast] Multi-hop planning timed out, using single relay")
+	}
+	if mhPlan != nil {
+		for i, n := range mhPlan.Chosen {
+			log.Printf("[NM-LagoFast] Multi-hop link %d: entry %s, %d hops, %s -> %s, est. %.1f ms to game server",
+				i+1, n.PublicIP, len(n.Path), n.LinkStart, n.LinkEnd, n.Delay)
+		}
+		log.Printf("[NM-LagoFast] Multi-hop: %d links from %d reachable candidates", len(mhPlan.Links), mhPlan.Measured)
+		// Hop IPs must reach the physical gateway, never the tunnel.
+		for _, ip := range mhPlan.BypassIPs {
+			if ip != nodeIP {
+				bypassCIDRs = append(bypassCIDRs, ip+"/32")
+			}
+		}
+	}
+
 	cleanupRoute, routeErr := setupBypassRoutes(nodeIP, bypassCIDRs)
 	if routeErr != nil {
 		log.Printf("[NM-LagoFast] Warning setting host route: %v", routeErr)
@@ -462,6 +503,10 @@ func (s *PluginService) Connect(connection map[string]map[string]dbus.Variant) *
 			},
 			"qyproxy_game_config": gameConfig,
 		},
+	}
+
+	if mhPlan != nil && len(mhPlan.Links) > 0 {
+		tunnelConfig["multiLink"] = mhPlan.Links
 	}
 
 	cfgBytes, _ := json.Marshal(tunnelConfig)
