@@ -104,6 +104,22 @@ func (s *PluginService) emitFailure(reason uint32) {
 	}
 }
 
+// vpnSetting reads a per-connection setting. NetworkManager delivers VPN
+// settings nested inside the "vpn" section: plain keys under "data" (a{ss})
+// and secret keys under "secrets" (a{ss}). A flat top-level string is still
+// accepted for callers that pass one.
+func vpnSetting(vpn map[string]dbus.Variant, key string) (string, bool) {
+	for _, section := range []string{"data", "secrets"} {
+		if m, ok := vpn[section].Value().(map[string]string); ok {
+			if v, ok := m[key]; ok {
+				return v, true
+			}
+		}
+	}
+	v, ok := vpn[key].Value().(string)
+	return v, ok
+}
+
 // NeedSecrets is invoked by NetworkManager to determine if credentials are required
 func (s *PluginService) NeedSecrets(connection map[string]map[string]dbus.Variant) (string, *dbus.Error) {
 	log.Printf("[NM-LagoFast] Received NeedSecrets check from NetworkManager")
@@ -113,8 +129,8 @@ func (s *PluginService) NeedSecrets(connection map[string]map[string]dbus.Varian
 		if !ok {
 			return "vpn", nil
 		}
-		token, _ := vpnData["token"].Value().(string)
-		pwd, _ := vpnData["password"].Value().(string)
+		token, _ := vpnSetting(vpnData, "token")
+		pwd, _ := vpnSetting(vpnData, "password")
 		if token == "" && pwd == "" {
 			return "vpn", nil
 		}
@@ -207,10 +223,10 @@ func (s *PluginService) Connect(connection map[string]map[string]dbus.Variant) *
 		return dbus.NewError("org.freedesktop.NetworkManager.VPN.Error.ConnectionInvalid", []interface{}{"missing vpn section"})
 	}
 
-	username, _ := vpnData["username"].Value().(string)
-	password, _ := vpnData["password"].Value().(string)
-	token, _ := vpnData["token"].Value().(string)
-	gameIDStr, _ := vpnData["game_id"].Value().(string)
+	username, _ := vpnSetting(vpnData, "username")
+	password, _ := vpnSetting(vpnData, "password")
+	token, _ := vpnSetting(vpnData, "token")
+	gameIDStr, _ := vpnSetting(vpnData, "game_id")
 
 	log.Printf("[NM-LagoFast] Authenticating user %s...", username)
 	if token != "" {
@@ -251,7 +267,7 @@ func (s *PluginService) Connect(connection map[string]map[string]dbus.Variant) *
 	if gameID == 54758 {
 		zoneID = 45983
 	}
-	if zoneIDStr, ok := vpnData["zone_id"].Value().(string); ok && zoneIDStr != "" {
+	if zoneIDStr, ok := vpnSetting(vpnData, "zone_id"); ok && zoneIDStr != "" {
 		if zid, err := strconv.Atoi(zoneIDStr); err == nil {
 			zoneID = zid
 		}
@@ -279,7 +295,7 @@ func (s *PluginService) Connect(connection map[string]map[string]dbus.Variant) *
 		subnetCh <- subnetResult{c, err}
 	}()
 
-	explicitNodeIP, _ := vpnData["node_ip"].Value().(string)
+	explicitNodeIP, _ := vpnSetting(vpnData, "node_ip")
 	if explicitNodeIP != "" && explicitNodeIP != "auto" {
 		log.Printf("[NM-LagoFast] Using explicit node IP from settings: %s", explicitNodeIP)
 		s.activeNode = &model.NodeItem{
