@@ -1,7 +1,7 @@
 # Maintainer: LagoFast VPN Project
 pkgname=lagofast-vpn
 pkgver=1.0.0
-pkgrel=2
+pkgrel=3
 pkgdesc="Native Linux client & NetworkManager VPN plugin for LagoFast gaming accelerator"
 arch=('x86_64')
 url="https://github.com/lagofast/lagofast-vpn"
