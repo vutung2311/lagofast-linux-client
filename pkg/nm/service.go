@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -50,8 +51,11 @@ const (
 )
 
 type PluginService struct {
-	conn         *dbus.Conn
-	state        uint32
+	conn  *dbus.Conn
+	state uint32
+	// engineUsed is set once the QyProxy engine has been started; it cannot be
+	// started again in the same process.
+	engineUsed   atomic.Bool
 	tunDev       *tunnel.Device
 	apiClient    *api.Client
 	session      *model.UserSession
@@ -215,6 +219,13 @@ func runIPBatch(lines []string) {
 // Connect is invoked by NetworkManager when initiating a VPN connection
 func (s *PluginService) Connect(connection map[string]map[string]dbus.Variant) *dbus.Error {
 	log.Printf("[NM-LagoFast] Received Connect request from NetworkManager")
+	if s.engineUsed.Load() {
+		// A request that raced ReleaseName in Disconnect; the engine would come up
+		// without a working netif, so fail loudly and let NM start a new process.
+		log.Printf("[NM-LagoFast] Refusing Connect: this service process already ran the engine")
+		return dbus.NewError("org.freedesktop.NetworkManager.VPN.Error.ServiceStartFailed",
+			[]interface{}{"service process already used; retry to start a fresh one"})
+	}
 	s.setState(StateStarting)
 
 	vpnData, ok := connection["vpn"]
@@ -510,6 +521,7 @@ func (s *PluginService) Connect(connection map[string]map[string]dbus.Variant) *
 	}
 
 	cfgBytes, _ := json.Marshal(tunnelConfig)
+	s.engineUsed.Store(true)
 	if err := tunnel.DefaultEngine.Init(""); err != nil {
 		log.Printf("[NM-LagoFast] Failed to initialize QyProxy engine: %v", err)
 		s.tunDev.Close()
@@ -620,6 +632,12 @@ func (s *PluginService) Disconnect() *dbus.Error {
 
 	s.setState(StateStopped)
 	log.Printf("[NM-LagoFast] Disconnected cleanly")
+	// The QyProxy engine cannot be started twice in one process (lwIP netif_add
+	// fails), so drop the bus name now: NM then spawns a fresh service for the
+	// next Connect instead of handing it to this exiting process.
+	if _, err := s.conn.ReleaseName(DBusService); err != nil {
+		log.Printf("[NM-LagoFast] Failed to release %s: %v", DBusService, err)
+	}
 	go func() {
 		time.Sleep(200 * time.Millisecond)
 		os.Exit(0)
