@@ -197,13 +197,21 @@ int qyproxy_init(const char* lib_dir) {
         return -4;
     }
 
-    g_h_proxy = dlopen(found_proxy.c_str(), RTLD_NOW | RTLD_GLOBAL);
+    // libproxy.so statically bundles the NDK's libc++/libc++abi (__cxa_throw,
+    // __gxx_personality_v0, operator new...). This binary links libstdc++, whose
+    // same-named symbols come first in the global scope, so without DEEPBIND the
+    // engine's exceptions are thrown and unwound by the wrong C++ runtime and any
+    // throw inside libproxy (e.g. asio socket::cancel() during UDP session aging)
+    // segfaults. DEEPBIND makes both libraries bind to libproxy's own runtime.
+    const int engine_flags = RTLD_NOW | RTLD_GLOBAL | RTLD_DEEPBIND;
+
+    g_h_proxy = dlopen(found_proxy.c_str(), engine_flags);
     if (!g_h_proxy) {
         g_last_error = std::string("dlopen libproxy failed: ") + dlerror();
         return -5;
     }
 
-    g_h_qy = dlopen(found_qy.c_str(), RTLD_NOW | RTLD_GLOBAL);
+    g_h_qy = dlopen(found_qy.c_str(), engine_flags);
     if (!g_h_qy) {
         g_last_error = std::string("dlopen libqyproxy-lib failed: ") + dlerror();
         return -6;
@@ -250,7 +258,8 @@ static bool create_client() {
     void** orig_vtable = *(void***)g_client;
     memcpy(g_vtable, orig_vtable, 64 * sizeof(void*));
 
-    void* pure_virt = dlsym(RTLD_DEFAULT, "__cxa_pure_virtual");
+    // Under DEEPBIND the engine's vtables point at libproxy's own copy, not libstdc++'s.
+    void* pure_virt = dlsym(g_h_proxy, "__cxa_pure_virtual");
     for (int i = 0; i < 64; i++) {
         if (g_vtable[i] == pure_virt) {
             g_vtable[i] = (void*)&dummy_virtual_fn;
