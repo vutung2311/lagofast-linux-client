@@ -21,9 +21,9 @@ import (
 )
 
 const (
-	DBusInterface = "org.freedesktop.NetworkManager.VPN.Plugin"
+	DBusInterface  = "org.freedesktop.NetworkManager.VPN.Plugin"
 	DBusObjectPath = "/org/freedesktop/NetworkManager/VPN/Plugin"
-	DBusService   = "org.freedesktop.NetworkManager.lagofast"
+	DBusService    = "org.freedesktop.NetworkManager.lagofast"
 
 	// NetworkManager VPN Service States (matching NMVpnServiceState in libnm)
 	StateUnknown  uint32 = 0
@@ -457,16 +457,16 @@ func (s *PluginService) Connect(connection map[string]map[string]dbus.Variant) *
 			"port":    nodePort,
 		},
 		"client": map[string]interface{}{
-			"protocol":           "UDP",
-			"group_id":           groupIDStr,
-			"login_token":        s.session.Token,
-			"username":           accountName,
-			"password":           plainPwd,
-			"client_type":        20,
-			"eventId":            12345678,
-			"sn":                 "c7a544b6-7917-488b-b892-06b297b1028b",
-			"mode":               1,
-			"serverid":           zoneID,
+			"protocol":    "UDP",
+			"group_id":    groupIDStr,
+			"login_token": s.session.Token,
+			"username":    accountName,
+			"password":    plainPwd,
+			"client_type": 20,
+			"eventId":     12345678,
+			"sn":          "c7a544b6-7917-488b-b892-06b297b1028b",
+			"mode":        1,
+			"serverid":    zoneID,
 			"product_line": map[string]interface{}{
 				"type":    "lagofast-android",
 				"version": "2.2.0.0",
