@@ -314,15 +314,10 @@ func (s *PluginService) Connect(connection map[string]map[string]dbus.Variant) *
 	if v, ok := vpnSetting(vpnData, "multihop"); ok && (v == "off" || v == "0" || v == "false") {
 		multiHopEnabled = false
 	}
-	entrySetting, _ := vpnSetting(vpnData, "multihop_entry")
-	entryProto, entryErr := api.ParseEntryProto(entrySetting)
-	if entryErr != nil {
-		log.Printf("[NM-LagoFast] %v; using tcp", entryErr)
-	}
 	mhCh := make(chan *api.MultiHopPlan, 1)
 	if multiHopEnabled && zoneID > 0 {
 		go func() {
-			plan, err := s.apiClient.PlanMultiHop(gameID, zoneID, entryProto)
+			plan, err := s.apiClient.PlanMultiHop(gameID, zoneID)
 			if err != nil {
 				log.Printf("[NM-LagoFast] Multi-hop unavailable, using single relay: %v", err)
 			}
@@ -388,15 +383,8 @@ func (s *PluginService) Connect(connection map[string]map[string]dbus.Variant) *
 	}
 	if mhPlan != nil {
 		for i, n := range mhPlan.Chosen {
-			proto := api.EntryTCP
-			if i < len(mhPlan.EntryProtos) {
-				proto = mhPlan.EntryProtos[i]
-			}
-			if proto != entryProto {
-				log.Printf("[NM-LagoFast] Multi-hop link %d: entry %s has no %s port, using %s", i+1, n.PublicIP, entryProto, proto)
-			}
-			log.Printf("[NM-LagoFast] Multi-hop link %d: entry %s (%s), %d hops, %s -> %s, est. %.1f ms to game server",
-				i+1, n.PublicIP, proto, len(n.Path), n.LinkStart, n.LinkEnd, n.Delay)
+			log.Printf("[NM-LagoFast] Multi-hop link %d: entry %s, %d hops, %s -> %s, est. %.1f ms to game server",
+				i+1, n.PublicIP, len(n.Path), n.LinkStart, n.LinkEnd, n.Delay)
 		}
 		log.Printf("[NM-LagoFast] Multi-hop: %d links from %d reachable candidates", len(mhPlan.Links), mhPlan.Measured)
 		// Hop IPs must reach the physical gateway, never the tunnel.

@@ -146,8 +146,6 @@ Implemented in [`pkg/api/multihop.go`](file:///home/tung/Git/lagofast_vpn/pkg/ap
 
 Crypto: AES-128-ECB, key = first 16 hex chars of `md5("43571366E30F489F")` (SDK `commonAesDesKey`), zero padding, hex. The benchmarked relay stays the control-session `server`; links are added on top, so a planning failure (or 15 s timeout) only loses the extra links. Disable per connection with `multihop=off` in `vpn.data`.
 
-**Entry hop transport (`multihop_entry`):** the SDK always sets the entry hop to `proc "tcp"`, so the game's UDP (KCP) rides inside TCP from this host to the entry node, and every lost segment stalls the stream for at least one RTT. The server also publishes `udp_port` for entry hops; `multihop_entry=udp` in `vpn.data` uses `proc "udp"` and the entry's first UDP port instead (default `tcp`). Paths whose entry has no UDP port fall back to TCP, and the connect log shows the protocol per link (`entry <ip> (udp)`). UDP entry is not confirmed by the SDK; check that the engine logs `multilink auth success` after switching. Set it before launching the game: `nmcli connection modify LagoFast-WWM +vpn.data multihop_entry=udp`.
-
 **Measured (2026-11-18, Vietnam -> SG zone):** TLS handshake through the tunnel to zone detection IPs: **~82-88 ms with multi-hop vs ~200-207 ms without**, across different relays; direct control IPs unchanged (~47 ms). The engine logs `multiLink size:2` and `multilink user auth success` (visible with `LAGOFAST_NATIVE_DEBUG=1`).
 
 > NetworkManager passes connection settings nested under `vpn.data` / `vpn.secrets`. Read them with `vpnSetting()`; flat top-level reads silently return nothing (this hid `game_id`/`zone_id`/`node_ip` overrides until 2026-11-18).
