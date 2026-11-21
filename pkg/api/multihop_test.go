@@ -49,9 +49,12 @@ func samplePath() MultiHopNode {
 }
 
 func TestBuildMultiLinkMatchesSDKShape(t *testing.T) {
-	got, err := BuildMultiLink(samplePath())
+	got, proto, err := BuildMultiLink(samplePath(), EntryTCP)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if proto != EntryTCP {
+		t.Fatalf("proto = %q, want tcp", proto)
 	}
 	b, _ := json.Marshal(got)
 	want := `{"delay":29,"path":[` +
@@ -67,8 +70,50 @@ func TestBuildMultiLinkMatchesSDKShape(t *testing.T) {
 func TestBuildMultiLinkRejectsPathWithoutEntry(t *testing.T) {
 	n := samplePath()
 	n.PublicIP = "9.9.9.9"
-	if _, err := BuildMultiLink(n); err == nil {
+	if _, _, err := BuildMultiLink(n, EntryTCP); err == nil {
 		t.Fatal("expected error when no hop matches the entry IP")
+	}
+}
+
+func TestBuildMultiLinkUDPEntry(t *testing.T) {
+	got, proto, err := BuildMultiLink(samplePath(), EntryUDP)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if proto != EntryUDP {
+		t.Fatalf("proto = %q, want udp", proto)
+	}
+	b, _ := json.Marshal(got)
+	want := `{"delay":29,"path":[` +
+		`{"ip":"216.133.159.134","proc":"udp","tcp_port":[22565,1871],"udp_port":[3485]},` +
+		`{"ip":"45.76.144.152","proc":"udp","tcp_port":[1429],"udp_port":[]},` +
+		`{"ip":"192.168.104.85","tcp_port":[10177],"udp_port":[]}],` +
+		`"port":3485,"server":"216.133.159.134"}`
+	if string(b) != want {
+		t.Fatalf("multiLink entry mismatch:\n got  %s\n want %s", b, want)
+	}
+}
+
+func TestBuildMultiLinkUDPEntryFallsBackToTCP(t *testing.T) {
+	n := samplePath()
+	n.Path[0].UDPPort = nil
+	got, proto, err := BuildMultiLink(n, EntryUDP)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if proto != EntryTCP || got["port"] != 22565 {
+		t.Fatalf("got proto %q port %v, want tcp fallback on 22565", proto, got["port"])
+	}
+}
+
+func TestParseEntryProto(t *testing.T) {
+	for in, want := range map[string]string{"": EntryTCP, "tcp": EntryTCP, " UDP ": EntryUDP} {
+		if got, err := ParseEntryProto(in); err != nil || got != want {
+			t.Errorf("ParseEntryProto(%q) = %q, %v; want %q", in, got, err, want)
+		}
+	}
+	if got, err := ParseEntryProto("kcp"); err == nil || got != EntryTCP {
+		t.Errorf("ParseEntryProto(kcp) = %q, %v; want tcp and an error", got, err)
 	}
 }
 

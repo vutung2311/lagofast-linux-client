@@ -196,11 +196,34 @@ func decodeAreaNodes(enc string) ([]MultiHopNode, error) {
 	return nodes, nil
 }
 
+// Entry hop transports for BuildMultiLink.
+const (
+	EntryTCP = "tcp" // SDK default
+	EntryUDP = "udp" // opt-in: avoids TCP head-of-line stalls on the first hop
+)
+
+// ParseEntryProto validates a multihop_entry setting; empty means EntryTCP.
+func ParseEntryProto(v string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "", EntryTCP:
+		return EntryTCP, nil
+	case EntryUDP:
+		return EntryUDP, nil
+	}
+	return EntryTCP, fmt.Errorf("unknown multi-hop entry protocol %q (want tcp or udp)", v)
+}
+
 // BuildMultiLink converts a ranked path into a QyProxy "multiLink" entry,
 // mirroring QyUnifiedProcessStrategy.multiLinkHopZoneNodesAssembleLogic:
 // server = entry IP, port = entry's first TCP port, and path = the entry hop
 // (proc "tcp") followed by the remaining hops in order.
-func BuildMultiLink(n MultiHopNode) (map[string]interface{}, error) {
+//
+// The SDK always uses TCP for the entry hop, so game UDP rides inside TCP on
+// the client's own link and every lost segment stalls it. With entryProto
+// EntryUDP the entry hop uses proc "udp" and its first UDP port instead; a
+// path whose entry has no UDP port falls back to TCP. The returned string is
+// the protocol actually used.
+func BuildMultiLink(n MultiHopNode, entryProto string) (map[string]interface{}, string, error) {
 	var entry *HopPathEntry
 	for i := range n.Path {
 		if n.Path[i].IP == n.PublicIP {
@@ -209,10 +232,15 @@ func BuildMultiLink(n MultiHopNode) (map[string]interface{}, error) {
 		}
 	}
 	if entry == nil || entry.IP == "" {
-		return nil, fmt.Errorf("path %d has no hop matching entry %s", n.ID, n.PublicIP)
+		return nil, "", fmt.Errorf("path %d has no hop matching entry %s", n.ID, n.PublicIP)
 	}
-	if len(entry.TCPPort) == 0 {
-		return nil, fmt.Errorf("path %d entry %s has no tcp_port", n.ID, n.PublicIP)
+	proto, port := EntryTCP, 0
+	if entryProto == EntryUDP && len(entry.UDPPort) > 0 {
+		proto, port = EntryUDP, entry.UDPPort[0]
+	} else if len(entry.TCPPort) > 0 {
+		port = entry.TCPPort[0]
+	} else {
+		return nil, "", fmt.Errorf("path %d entry %s has no tcp_port", n.ID, n.PublicIP)
 	}
 
 	hop := func(p HopPathEntry, proc string) map[string]interface{} {
@@ -226,7 +254,7 @@ func BuildMultiLink(n MultiHopNode) (map[string]interface{}, error) {
 		}
 		return m
 	}
-	path := []interface{}{hop(*entry, "tcp")}
+	path := []interface{}{hop(*entry, proto)}
 	for _, p := range n.Path {
 		if p.IP != n.PublicIP {
 			path = append(path, hop(p, p.ForceProtocol))
@@ -234,10 +262,10 @@ func BuildMultiLink(n MultiHopNode) (map[string]interface{}, error) {
 	}
 	return map[string]interface{}{
 		"server": n.PublicIP,
-		"port":   entry.TCPPort[0],
+		"port":   port,
 		"delay":  int(n.Delay),
 		"path":   path,
-	}, nil
+	}, proto, nil
 }
 
 func nonNilInts(v []int) []int {
@@ -285,15 +313,16 @@ func PickLinks(main, replicas []MultiHopNode) []MultiHopNode {
 
 // MultiHopPlan is the result of the full multi-hop selection for one connect.
 type MultiHopPlan struct {
-	Links     []map[string]interface{} // top-level "multiLink" entries
-	Chosen    []MultiHopNode           // the paths behind Links, best first
-	BypassIPs []string                 // public hop IPs that must bypass the tunnel
-	Measured  int                      // candidates that answered ICMP
+	Links       []map[string]interface{} // top-level "multiLink" entries
+	Chosen      []MultiHopNode           // the paths behind Links, best first
+	EntryProtos []string                 // entry hop protocol used per link
+	BypassIPs   []string                 // public hop IPs that must bypass the tunnel
+	Measured    int                      // candidates that answered ICMP
 }
 
 // PlanMultiHop runs candidates -> ICMP delays -> shortest paths -> links.
 // It needs no tunnel and is safe to run while other connect work proceeds.
-func (c *Client) PlanMultiHop(gameID, zoneID int) (*MultiHopPlan, error) {
+func (c *Client) PlanMultiHop(gameID, zoneID int, entryProto string) (*MultiHopPlan, error) {
 	cands, err := c.GetMultiHopCandidates(gameID, zoneID)
 	if err != nil {
 		return nil, err
@@ -308,12 +337,13 @@ func (c *Client) PlanMultiHop(gameID, zoneID int) (*MultiHopPlan, error) {
 	}
 	plan := &MultiHopPlan{Measured: len(delays)}
 	for _, n := range PickLinks(main, replicas) {
-		link, err := BuildMultiLink(n)
+		link, proto, err := BuildMultiLink(n, entryProto)
 		if err != nil {
 			continue
 		}
 		plan.Links = append(plan.Links, link)
 		plan.Chosen = append(plan.Chosen, n)
+		plan.EntryProtos = append(plan.EntryProtos, proto)
 	}
 	if len(plan.Links) == 0 {
 		return nil, fmt.Errorf("server returned %d paths but none were usable", len(main))
