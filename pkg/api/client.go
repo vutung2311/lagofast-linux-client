@@ -107,6 +107,13 @@ func (c *Client) SetToken(token, uid string) {
 }
 
 func (c *Client) doRequest(method, path string, query url.Values, body interface{}) ([]byte, error) {
+	return c.doRequestAuth(method, path, query, body, true)
+}
+
+// doRequestAuth is doRequest with control over whether the saved login credential
+// is attached. Anonymous calls (e.g. polling a sign-in state) must not leak an old
+// session token to endpoints that don't need it.
+func (c *Client) doRequestAuth(method, path string, query url.Values, body interface{}, withToken bool) ([]byte, error) {
 	reqURL := c.BaseURL + path
 	if len(query) > 0 {
 		reqURL += "?" + query.Encode()
@@ -127,13 +134,16 @@ func (c *Client) doRequest(method, path string, query url.Values, body interface
 	}
 
 	req.Header.Set("User-Agent", UserAgent)
+	// The third_party_login service validates "Useragent" (the web client's header)
+	// and rejects requests where neither it nor User-Agent has the app format.
+	req.Header.Set("Useragent", UserAgent)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Client-Language", "en")
 	req.Header.Set("Saas-App-Id", "LG_ANDROID")
 	req.Header.Set("Saas-Product-Line", "LG")
 	req.Header.Set("Saas-Platform", "android")
-	if c.Token != "" {
+	if withToken && c.Token != "" {
 		req.Header.Set("Login-Credential", c.Token)
 		req.Header.Set("Authorization", "Bearer "+c.Token)
 	}
@@ -150,10 +160,24 @@ func (c *Client) doRequest(method, path string, query url.Values, body interface
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return respBytes, fmt.Errorf("http error %d: %s", resp.StatusCode, string(respBytes))
+		return respBytes, &HTTPError{Status: resp.StatusCode, Body: string(respBytes)}
 	}
 
 	return respBytes, nil
+}
+
+// HTTPError is a non-2xx response from the LagoFast API.
+type HTTPError struct {
+	Status int
+	Body   string
+}
+
+func (e *HTTPError) Error() string { return fmt.Sprintf("http error %d: %s", e.Status, e.Body) }
+
+// IsUnauthorized reports whether err means the login credential was rejected or expired.
+func IsUnauthorized(err error) bool {
+	var he *HTTPError
+	return errors.As(err, &he) && (he.Status == http.StatusUnauthorized || he.Status == http.StatusForbidden)
 }
 
 // HashPassword generates MD5 hash if the API expects hashed password
@@ -238,15 +262,16 @@ func (c *Client) LoginWithToken(token string) (*model.UserSession, error) {
 	}
 
 	if err := json.Unmarshal(respBytes, &resp); err != nil {
-		session := &model.UserSession{
-			Token: token,
-		}
-		return session, nil
+		return nil, fmt.Errorf("token validation failed: unexpected response: %w", err)
 	}
 
 	uid := resp.UID
 	if uid == "" {
 		uid = resp.Data.UID
+	}
+	if uid == "" {
+		// A 200 without a member UID is not a confirmed login; don't save it as one.
+		return nil, fmt.Errorf("token validation failed: response has no member uid")
 	}
 	email := resp.Email
 	if email == "" {

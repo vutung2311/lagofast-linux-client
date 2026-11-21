@@ -74,6 +74,14 @@ type UserSession struct {
 	ExpireTime  int64  `json:"expire_time,omitempty"`
 	IsVIP       bool   `json:"is_vip,omitempty"`
 	RemainHours int    `json:"remain_hours,omitempty"`
+	// BrowserProfile is the browser profile (e.g. "chrome:Default") the login came
+	// from, so later logins reopen the same window instead of a guessed one.
+	BrowserProfile string `json:"browser_profile,omitempty"`
+	// Verified is true when the token came straight from a backend sign-in
+	// (not scraped from a browser) and was confirmed with member/detail.
+	Verified    bool   `json:"verified,omitempty"`
+	VerifiedAt  int64  `json:"verified_at,omitempty"`  // unix seconds
+	LoginMethod string `json:"login_method,omitempty"` // e.g. "google-device", "browser-cookie", "password"
 }
 
 type GameItem struct {

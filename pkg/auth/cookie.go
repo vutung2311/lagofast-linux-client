@@ -2,19 +2,26 @@ package auth
 
 import (
 	"bytes"
-	"context"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/hmac"
 	"crypto/sha1"
+	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
-	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
+	"unicode/utf8"
 )
+
+// LoginCookieName is the cookie lagofast.com sets after a successful sign-in.
+const LoginCookieName = "Login-Credential"
 
 // DeriveKey derives the 16-byte AES-CBC key using Chromium's Linux PBKDF2 parameters (iterations=1)
 func DeriveKey(password string) []byte {
@@ -24,218 +31,240 @@ func DeriveKey(password string) []byte {
 	return h.Sum(nil)[:16]
 }
 
-// GetChromeSecret retrieves the Chrome Safe Storage secret from desktop Secret Service
-func GetChromeSecret() string {
-	candidates := []struct {
-		server string
-		user   string
-	}{
-		{"Chrome Keys", "Chrome Safe Storage"},
-		{"Chromium Keys", "Chromium Safe Storage"},
-		{"Brave Keys", "Brave Safe Storage"},
-	}
+var (
+	secretMu    sync.Mutex
+	secretCache = map[[2]string]string{}
+)
 
-	for _, c := range candidates {
-		cmd := exec.Command("secret-tool", "lookup", "server", c.server, "user", c.user)
-		out, err := cmd.Output()
-		if err == nil && len(bytes.TrimSpace(out)) > 0 {
-			return string(bytes.TrimSpace(out))
+// lookupSecret reads a browser "Safe Storage" secret from the Secret Service, falling
+// back to KWallet (Chromium on KDE stores it there by default).
+func lookupSecret(server, user string) string {
+	secretMu.Lock()
+	defer secretMu.Unlock()
+	k := [2]string{server, user}
+	if v, ok := secretCache[k]; ok {
+		return v
+	}
+	v := ""
+	if out, err := exec.Command("secret-tool", "lookup", "server", server, "user", user).Output(); err == nil {
+		v = string(bytes.TrimSpace(out))
+	}
+	if v == "" {
+		if out, err := exec.Command("kwallet-query", "-r", user, "-f", server, "kdewallet").Output(); err == nil {
+			v = string(bytes.TrimSpace(out))
+			if strings.HasPrefix(v, "Failed") {
+				v = ""
+			}
 		}
 	}
-
-	// Fallback to Chromium hardcoded Linux secret
-	return "peanuts"
+	secretCache[k] = v
+	return v
 }
 
-// DecryptCookie decrypts a hex-encoded cookie value from Chromium SQLite database
-func DecryptCookie(encHex string, key []byte) (string, error) {
-	encHex = strings.TrimSpace(encHex)
-	if len(encHex) == 0 {
-		return "", fmt.Errorf("empty encrypted cookie")
+// candidateKeys returns the AES keys to try for a cookie of the given version prefix.
+func (p *BrowserProfile) candidateKeys(prefix string) [][]byte {
+	var keys [][]byte
+	peanuts := DeriveKey("peanuts")
+	if prefix == "v10" {
+		keys = append(keys, peanuts)
 	}
-
-	data, err := hex.DecodeString(encHex)
-	if err != nil {
-		return "", fmt.Errorf("failed to hex-decode cookie: %w", err)
+	for _, kr := range p.def.Keyrings {
+		if s := lookupSecret(kr[0], kr[1]); s != "" {
+			keys = append(keys, DeriveKey(s))
+		}
 	}
-
-	// Must start with v10 or v11
-	if len(data) < 3 {
-		return "", fmt.Errorf("encrypted cookie too short")
+	if prefix != "v10" {
+		keys = append(keys, peanuts)
 	}
+	return keys
+}
 
-	ciphertext := data[3:]
-	if len(ciphertext)%aes.BlockSize != 0 {
-		return "", fmt.Errorf("ciphertext length %d not a multiple of AES block size", len(ciphertext))
+// decryptWithKey decrypts one Chromium cookie payload (without the vNN prefix) and
+// checks that the result is really plaintext. AES-CBC with a wrong key does not fail;
+// it produces garbage, so padding and (for DB schema >= 24) the SHA-256 of the host
+// that Chromium prepends are both verified.
+func decryptWithKey(ciphertext, key []byte, host string, metaVersion int) (string, bool) {
+	if len(ciphertext) == 0 || len(ciphertext)%aes.BlockSize != 0 {
+		return "", false
 	}
-
 	block, err := aes.NewCipher(key)
 	if err != nil {
-		return "", fmt.Errorf("cipher initialization error: %w", err)
+		return "", false
 	}
+	out := make([]byte, len(ciphertext))
+	cipher.NewCBCDecrypter(block, bytes.Repeat([]byte(" "), aes.BlockSize)).CryptBlocks(out, ciphertext)
 
-	iv := bytes.Repeat([]byte(" "), aes.BlockSize)
-	mode := cipher.NewCBCDecrypter(block, iv)
-
-	decrypted := make([]byte, len(ciphertext))
-	mode.CryptBlocks(decrypted, ciphertext)
-
-	// Strip PKCS7 padding
-	if len(decrypted) == 0 {
-		return "", fmt.Errorf("empty decrypted payload")
+	pad := int(out[len(out)-1])
+	if pad == 0 || pad > aes.BlockSize || pad > len(out) {
+		return "", false
 	}
-	padLen := int(decrypted[len(decrypted)-1])
-	if padLen > 0 && padLen <= aes.BlockSize {
-		decrypted = decrypted[:len(decrypted)-padLen]
+	for _, b := range out[len(out)-pad:] {
+		if int(b) != pad {
+			return "", false
+		}
 	}
+	out = out[:len(out)-pad]
 
-	// Modern Linux Chromium (v11) prepends a 32-byte header before the plaintext cookie value
-	if len(decrypted) > 32 {
-		return string(decrypted[32:]), nil
+	if metaVersion >= 24 {
+		sum := sha256.Sum256([]byte(host))
+		if len(out) < len(sum) || !bytes.Equal(out[:len(sum)], sum[:]) {
+			return "", false
+		}
+		out = out[len(sum):]
 	}
-
-	return string(decrypted), nil
+	if !utf8.Valid(out) {
+		return "", false
+	}
+	return string(out), true
 }
 
-// GetCookieDBPaths returns potential SQLite cookie file locations
-func GetCookieDBPaths() []string {
-	home, err := os.UserHomeDir()
+func (p *BrowserProfile) decrypt(enc []byte, host string, metaVersion int) (string, error) {
+	if len(enc) < 3 {
+		return "", errors.New("encrypted cookie too short")
+	}
+	prefix := string(enc[:3])
+	if prefix != "v10" && prefix != "v11" {
+		return "", fmt.Errorf("unsupported cookie encryption %q", prefix)
+	}
+	for _, key := range p.candidateKeys(prefix) {
+		if v, ok := decryptWithKey(enc[3:], key, host, metaVersion); ok {
+			return v, nil
+		}
+	}
+	return "", fmt.Errorf("could not decrypt %s cookie with any known %s key (is the keyring unlocked?)", prefix, p.def.Name)
+}
+
+// Cookie is one decrypted lagofast.com cookie.
+type Cookie struct {
+	Host, Name, Value string
+	Created           time.Time
+	LastAccess        time.Time
+}
+
+// chromeTime converts Chromium's microseconds-since-1601 to time.Time.
+func chromeTime(s string) time.Time {
+	us, err := strconv.ParseInt(strings.TrimSpace(s), 10, 64)
+	if err != nil || us == 0 {
+		return time.Time{}
+	}
+	return time.UnixMicro(us - 11644473600*1000000)
+}
+
+// snapshotDB copies the cookie DB (and its rollback journal) so we never contend for
+// the running browser's lock and always read a consistent state.
+func snapshotDB(src string) (string, func(), error) {
+	dir, err := os.MkdirTemp("", "lagofast-cookies-")
 	if err != nil {
-		return nil
+		return "", nil, err
 	}
-
-	return []string{
-		filepath.Join(home, ".config", "google-chrome", "Default", "Cookies"),
-		filepath.Join(home, ".config", "google-chrome", "Profile 1", "Cookies"),
-		filepath.Join(home, ".config", "chromium", "Default", "Cookies"),
-		filepath.Join(home, ".config", "BraveSoftware", "Brave-Browser", "Default", "Cookies"),
-		filepath.Join(home, ".config", "microsoft-edge", "Default", "Cookies"),
-	}
-}
-
-// ReadLagofastCookie attempts to read and decrypt the Login-Credential cookie
-func ReadLagofastCookie(cookieName string) (string, error) {
-	if cookieName == "" {
-		cookieName = "Login-Credential"
-	}
-
-	secret := GetChromeSecret()
-	key := DeriveKey(secret)
-
-	var lastErr error
-	for _, dbPath := range GetCookieDBPaths() {
-		if _, err := os.Stat(dbPath); err != nil {
-			continue
-		}
-
-		// Copy database to a temporary location to prevent SQLite lock contention with running browser
-		tmpDB := fmt.Sprintf("/tmp/lagofast_cookie_%d.db", time.Now().UnixNano())
-		input, err := os.ReadFile(dbPath)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		if err := os.WriteFile(tmpDB, input, 0600); err != nil {
-			lastErr = err
-			continue
-		}
-		defer os.Remove(tmpDB)
-
-		query := fmt.Sprintf("SELECT hex(encrypted_value) FROM cookies WHERE host_key LIKE '%%lagofast.com' AND name = '%s' ORDER BY creation_utc DESC LIMIT 1;", cookieName)
-		cmd := exec.Command("sqlite3", "-batch", "-noheader", tmpDB, query)
-		out, err := cmd.Output()
-		if err != nil {
-			lastErr = err
-			continue
-		}
-
-		hexVal := strings.TrimSpace(string(out))
-		if hexVal == "" {
-			continue
-		}
-
-		val, err := DecryptCookie(hexVal, key)
-		if err == nil && val != "" {
-			return val, nil
-		}
-		lastErr = err
-	}
-
-	if lastErr != nil {
-		return "", lastErr
-	}
-	return "", fmt.Errorf("cookie %s not found in browser database", cookieName)
-}
-
-// WatchForLoginCookie polls the browser cookie database until Login-Credential appears
-func WatchForLoginCookie(ctx context.Context, timeout time.Duration) (string, error) {
-	deadline := time.Now().Add(timeout)
-	ticker := time.NewTicker(1 * time.Second)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return "", ctx.Err()
-		case <-ticker.C:
-			token, err := ReadLagofastCookie("Login-Credential")
-			if err == nil && len(token) > 0 {
-				return token, nil
-			}
-			if time.Now().After(deadline) {
-				return "", fmt.Errorf("timed out waiting for login in browser")
+	cleanup := func() { os.RemoveAll(dir) }
+	dst := dir + "/Cookies"
+	for _, suffix := range []string{"", "-journal", "-wal"} {
+		if err := copyFile(src+suffix, dst+suffix); err != nil {
+			if suffix == "" {
+				cleanup()
+				return "", nil, err
 			}
 		}
 	}
+	return dst, cleanup, nil
 }
 
-// LaunchBrowserWindow opens the LagoFast sign-in page in an app-mode window or default browser
-func LaunchBrowserWindow(url string) (*exec.Cmd, error) {
-	// Try opening with Chrome in app window mode (looks identical to native desktop client)
-	for _, bin := range []string{"google-chrome-stable", "google-chrome", "chromium", "brave"} {
-		if path, err := exec.LookPath(bin); err == nil {
-			cmd := exec.Command(path, fmt.Sprintf("--app=%s", url))
-			if err := cmd.Start(); err == nil {
-				return cmd, nil
-			}
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		return err
+	}
+	return out.Close()
+}
+
+func sqliteQuery(db, query string) ([][]string, error) {
+	out, err := exec.Command("sqlite3", "-batch", "-noheader", "-separator", "\t", db, query).Output()
+	if err != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) && len(ee.Stderr) > 0 {
+			return nil, fmt.Errorf("sqlite3: %s", strings.TrimSpace(string(ee.Stderr)))
+		}
+		return nil, fmt.Errorf("sqlite3: %w", err)
+	}
+	var rows [][]string
+	for _, line := range strings.Split(strings.TrimRight(string(out), "\n"), "\n") {
+		if line != "" {
+			rows = append(rows, strings.Split(line, "\t"))
 		}
 	}
+	return rows, nil
+}
 
-	// Fallback to xdg-open
-	cmd := exec.Command("xdg-open", url)
-	if err := cmd.Start(); err != nil {
+// ReadLagofastCookies returns this profile's lagofast.com cookies, newest first.
+// An empty name returns all of them.
+func (p *BrowserProfile) ReadLagofastCookies(name string) ([]Cookie, error) {
+	db, cleanup, err := snapshotDB(p.CookiePath())
+	if err != nil {
 		return nil, err
 	}
-	return cmd, nil
+	defer cleanup()
+
+	metaVersion := 0
+	if rows, err := sqliteQuery(db, "SELECT value FROM meta WHERE key='version';"); err == nil && len(rows) > 0 {
+		metaVersion, _ = strconv.Atoi(rows[0][0])
+	}
+
+	q := "SELECT host_key, name, hex(encrypted_value), hex(value), creation_utc, last_access_utc FROM cookies " +
+		"WHERE (host_key = 'lagofast.com' OR host_key LIKE '%.lagofast.com')"
+	if name != "" {
+		q += " AND name = '" + strings.ReplaceAll(name, "'", "''") + "'"
+	}
+	q += " ORDER BY creation_utc DESC;"
+	rows, err := sqliteQuery(db, q)
+	if err != nil {
+		return nil, err
+	}
+
+	var cookies []Cookie
+	var lastErr error
+	for _, r := range rows {
+		if len(r) < 6 {
+			continue
+		}
+		c := Cookie{Host: r[0], Name: r[1], Created: chromeTime(r[4]), LastAccess: chromeTime(r[5])}
+		if plain, _ := hex.DecodeString(r[3]); len(plain) > 0 {
+			c.Value = string(plain)
+		} else if enc, _ := hex.DecodeString(r[2]); len(enc) > 0 {
+			v, err := p.decrypt(enc, c.Host, metaVersion)
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			c.Value = v
+		}
+		cookies = append(cookies, c)
+	}
+	if len(cookies) == 0 && lastErr != nil {
+		return nil, lastErr
+	}
+	return cookies, nil
 }
 
-// CloseAuthWindow attempts to close the login window across Wayland/KDE and X11
-func CloseAuthWindow() {
-	// 1. If running KDE Plasma / KWin (Wayland or X11)
-	script := `for (var i = 0; i < workspace.windowList().length; i++) {
-		var w = workspace.windowList()[i];
-		if (w.caption && (w.caption.indexOf("LagoFast") !== -1 || w.caption.indexOf("Sign in") !== -1)) {
-			w.closeWindow();
-		}
-	}`
-	tmpScript := fmt.Sprintf("/tmp/lagofast_close_%d.js", time.Now().UnixNano())
-	if err := os.WriteFile(tmpScript, []byte(script), 0600); err == nil {
-		defer os.Remove(tmpScript)
-		_ = exec.Command("qdbus", "org.kde.KWin", "/Scripting", "unloadScript", "close_lagofast").Run()
-		_ = exec.Command("qdbus", "org.kde.KWin", "/Scripting", "loadScript", tmpScript, "close_lagofast").Run()
-		_ = exec.Command("qdbus", "org.kde.KWin", "/Scripting", "start").Run()
+// ReadLoginCredential returns the profile's Login-Credential cookie, or "" if absent.
+func (p *BrowserProfile) ReadLoginCredential() (string, error) {
+	cookies, err := p.ReadLagofastCookies(LoginCookieName)
+	if err != nil {
+		return "", err
 	}
-
-	// 2. If running X11 or XWayland, try xdotool
-	if xdotool, err := exec.LookPath("xdotool"); err == nil {
-		out, err := exec.Command(xdotool, "search", "--name", "LagoFast").Output()
-		if err == nil {
-			for _, line := range strings.Split(string(out), "\n") {
-				id := strings.TrimSpace(line)
-				if id != "" {
-					_ = exec.Command(xdotool, "windowclose", id).Run()
-				}
-			}
+	for _, c := range cookies {
+		if c.Value != "" {
+			return c.Value, nil
 		}
 	}
+	return "", nil
 }

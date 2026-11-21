@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"net"
@@ -10,6 +11,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -23,8 +25,10 @@ import (
 func printUsage() {
 	fmt.Println("LagoFast VPN Client for Linux")
 	fmt.Println("\nUsage:")
-	fmt.Println("  lagofast login --google                     Authenticate via Google OAuth in browser")
-	fmt.Println("  lagofast login --from-browser               Import existing session from browser cookies")
+	fmt.Println("  lagofast login                              Sign in with Google in any browser (prints the URL too)")
+	fmt.Println("  lagofast login --no-open                    Only print the sign-in URL, e.g. for another device")
+	fmt.Println("  lagofast login --from-browser [--browser id] Fallback: import a session from browser cookies")
+	fmt.Println("  lagofast login --list-browsers              Show detected browser profiles")
 	fmt.Println("  lagofast login --token <token>              Authenticate with web session token")
 	fmt.Println("  lagofast login -u <account> -p <password>   Authenticate with account & password")
 	fmt.Println("  lagofast games [-q <search>]                List supported games")
@@ -56,72 +60,108 @@ func main() {
 		loginCmd := flag.NewFlagSet("login", flag.ExitOnError)
 		account := loginCmd.String("u", "", "Account username or email")
 		password := loginCmd.String("p", "", "Account password")
-		useGoogle := loginCmd.Bool("google", false, "Authenticate using Google OAuth in browser")
-		fromBrowser := loginCmd.Bool("from-browser", false, "Import session from browser cookies")
+		_ = loginCmd.Bool("google", false, "Sign in with Google in any browser (the default)")
+		noOpen := loginCmd.Bool("no-open", false, "Only print the sign-in URL (e.g. to open it on another device)")
+		timeout := loginCmd.Duration("timeout", 5*time.Minute, "How long to wait for the sign-in to complete")
+		fromBrowser := loginCmd.Bool("from-browser", false, "Fallback: import a session from Chromium browser cookies")
 		googleToken := loginCmd.String("google-token", "", "Authenticate directly with Google ID token")
 		loginToken := loginCmd.String("token", "", "Authenticate with existing Login-Credential token")
+		browserPref := loginCmd.String("browser", os.Getenv("LAGOFAST_BROWSER"),
+			`With --from-browser: profile to read, e.g. "chrome:Default", "chrome" or an email (env LAGOFAST_BROWSER)`)
+		listBrowsers := loginCmd.Bool("list-browsers", false, "List detected browser profiles and exit")
 		loginCmd.Parse(os.Args[2:])
+
+		if *listBrowsers {
+			printBrowserProfiles()
+			return
+		}
 
 		var sess *model.UserSession
 		var err error
+		usedProfile := ""
+
+		// validate checks a cookie token against LagoFast and keeps the session on success.
+		validate := func(token string) error {
+			s, verr := client.LoginWithToken(token)
+			if verr != nil {
+				return verr
+			}
+			sess = s
+			return nil
+		}
 
 		if *fromBrowser {
+			profiles := auth.DiscoverProfiles()
+			if *browserPref != "" {
+				profiles = auth.MatchProfiles(profiles, *browserPref)
+				if len(profiles) == 0 {
+					fmt.Printf("No browser profile matches %q. Run 'lagofast login --list-browsers'.\n", *browserPref)
+					os.Exit(1)
+				}
+			}
 			fmt.Println("Reading LagoFast session from browser cookies...")
-			token, cookieErr := auth.ReadLagofastCookie("Login-Credential")
-			if cookieErr != nil {
-				fmt.Printf("Failed to read cookie: %v\n", cookieErr)
-				return
+			type found struct {
+				p   auth.BrowserProfile
+				tok string
+				at  time.Time
 			}
-			fmt.Println("Validating session token with LagoFast CBS...")
-			sess, err = client.LoginWithToken(token)
-		} else if *useGoogle {
-			// Check if already logged in in browser first
-			token, _ := auth.ReadLagofastCookie("Login-Credential")
-			if token != "" {
-				fmt.Println("Existing browser session detected. Validating...")
-				sess, err = client.LoginWithToken(token)
+			var cands []found
+			for _, p := range profiles {
+				cookies, cerr := p.ReadLagofastCookies(auth.LoginCookieName)
+				if cerr != nil {
+					fmt.Printf("  %s: %v\n", p.Label(), cerr)
+					continue
+				}
+				for _, c := range cookies {
+					if c.Value != "" {
+						cands = append(cands, found{p, c.Value, c.Created})
+						break
+					}
+				}
 			}
-			if sess == nil {
-				loginURL := "https://www.lagofast.com/en/user/login/"
-				fmt.Println("Opening LagoFast sign-in in browser window...")
-				fmt.Printf("URL: %s\n", loginURL)
-				cmd, launchErr := auth.LaunchBrowserWindow(loginURL)
-				if launchErr != nil {
-					fmt.Printf("Warning: Failed to launch browser automatically: %v\nPlease open the URL manually.\n", launchErr)
+			if len(cands) == 0 {
+				fmt.Println("No LagoFast login cookie found in any browser profile. Try plain 'lagofast login'.")
+				os.Exit(1)
+			}
+			sort.Slice(cands, func(i, j int) bool { return cands[i].at.After(cands[j].at) })
+			for _, c := range cands {
+				fmt.Printf("Validating session from %s...\n", c.p.Label())
+				if err = validate(c.tok); err == nil {
+					usedProfile = c.p.ID()
+					sess.LoginMethod = "browser-cookie"
+					break
 				}
-				fmt.Println("Waiting for authentication in browser (Sign in with Google)...")
-				ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-				defer cancel()
-				token, err = auth.WatchForLoginCookie(ctx, 5*time.Minute)
-				if cmd != nil && cmd.Process != nil {
-					_ = cmd.Process.Kill()
-				}
-				auth.CloseAuthWindow()
-				if err != nil {
-					fmt.Printf("Authentication failed or cancelled: %v\n", err)
-					return
-				}
-				fmt.Println("Session token captured! Validating with LagoFast...")
-				sess, err = client.LoginWithToken(token)
+				fmt.Printf("  rejected: %v\n", err)
 			}
 		} else if *loginToken != "" {
 			fmt.Println("Validating session token with LagoFast...")
-			sess, err = client.LoginWithToken(*loginToken)
+			if sess, err = client.LoginWithToken(*loginToken); err == nil {
+				sess.LoginMethod = "token"
+			}
 		} else if *googleToken != "" {
 			fmt.Println("Authenticating with Google ID token...")
-			sess, err = client.LoginWithGoogle(*googleToken)
-		} else if *account != "" && *password != "" {
+			if sess, err = client.LoginWithGoogle(*googleToken); err == nil {
+				sess.LoginMethod = "google-jwt"
+			}
+		} else if *account != "" || *password != "" {
+			if *account == "" || *password == "" {
+				fmt.Println("Error: -u and -p must be given together.")
+				return
+			}
 			fmt.Printf("Authenticating account %s with LagoFast...\n", *account)
-			sess, err = client.Login(*account, *password)
+			if sess, err = client.Login(*account, *password); err == nil {
+				sess.LoginMethod = "password"
+			}
 		} else {
-			fmt.Println("Error: specify either --google, --from-browser, --token <token>, or -u & -p.")
-			return
+			// Default: device-style Google sign-in that works in any browser.
+			sess, err = deviceGoogleLogin(client, *noOpen, *timeout)
 		}
 
-		if err != nil {
+		if err != nil || sess == nil {
 			fmt.Printf("Login failed: %v\n", err)
-			return
+			os.Exit(1)
 		}
+		sess.BrowserProfile = usedProfile
 
 		if err := model.SaveSession(sess); err != nil {
 			fmt.Printf("Failed to save session: %v\n", err)
@@ -264,16 +304,16 @@ func main() {
 				"port":    nodePort,
 			},
 			"client": map[string]interface{}{
-				"protocol":           "UDP",
-				"group_id":           "320",
-				"login_token":        session.Token,
-				"username":           accountName,
-				"password":           plainPwd,
-				"client_type":        20,
-				"eventId":            12345678,
-				"sn":                 "c7a544b6-7917-488b-b892-06b297b1028b",
-				"mode":               1,
-				"serverid":           zoneID,
+				"protocol":    "UDP",
+				"group_id":    "320",
+				"login_token": session.Token,
+				"username":    accountName,
+				"password":    plainPwd,
+				"client_type": 20,
+				"eventId":     12345678,
+				"sn":          "c7a544b6-7917-488b-b892-06b297b1028b",
+				"mode":        1,
+				"serverid":    zoneID,
 				"product_line": map[string]interface{}{
 					"type":    "lagofast-android",
 					"version": "2.2.0.0",
@@ -348,15 +388,50 @@ func main() {
 	case "status":
 		if session == nil {
 			fmt.Println("No active session found. Please run 'lagofast login'.")
-			return
+			os.Exit(1)
 		}
-		fmt.Printf("Logged in as: %s\n", session.Account)
-		fmt.Printf("User UID:     %s\n", session.UID)
-		if session.Nickname != "" {
-			fmt.Printf("Nickname:     %s\n", session.Nickname)
+		// Ask the backend: the session file alone says nothing about whether
+		// LagoFast still accepts the token. Every field printed below comes from
+		// this live response; nothing is filled in from local guesses.
+		live, verr := client.LoginWithToken(session.Token)
+		if verr != nil {
+			if api.IsUnauthorized(verr) {
+				fmt.Printf("Session:      EXPIRED or revoked (account %s). Run 'lagofast login'.\n", session.Account)
+				os.Exit(1)
+			}
+			fmt.Printf("Session:      UNKNOWN - could not reach LagoFast (%v)\n", verr)
+			fmt.Printf("Saved for:    %s (UID %s), not verified now\n", session.Account, session.UID)
+			os.Exit(2)
 		}
-		if session.ExpireTime > 0 {
-			fmt.Printf("Expires:      %d\n", session.ExpireTime)
+		fmt.Println("Session:      valid (confirmed by LagoFast just now)")
+		fmt.Printf("Logged in as: %s\n", live.Account)
+		fmt.Printf("User UID:     %s\n", live.UID)
+		if live.Email != "" && live.Email != live.Account {
+			fmt.Printf("Email:        %s\n", live.Email)
+		}
+		if live.Nickname != "" {
+			fmt.Printf("Nickname:     %s\n", live.Nickname)
+		}
+		if live.ExpireTime > 0 {
+			fmt.Printf("Expires:      %s\n", time.Unix(live.ExpireTime, 0).Format(time.RFC3339))
+		} else {
+			fmt.Println("Expires:      not reported by LagoFast")
+		}
+		if live.IsVIP {
+			fmt.Println("VIP:          yes")
+		} else {
+			fmt.Println("VIP:          not reported by LagoFast")
+		}
+		method := session.LoginMethod
+		if method == "" {
+			method = "unknown (saved before login methods were recorded)"
+		}
+		fmt.Printf("Signed in via: %s\n", method)
+		if session.Verified && session.VerifiedAt > 0 {
+			fmt.Printf("Backend-issued at: %s\n", time.Unix(session.VerifiedAt, 0).Format(time.RFC3339))
+		}
+		if live.UID != session.UID {
+			fmt.Printf("Warning: saved UID %s differs from the server's %s; run 'lagofast login' again.\n", session.UID, live.UID)
 		}
 
 	case "logout":
@@ -499,4 +574,67 @@ supports-multiple-connections=false
 	fmt.Printf("\n1. Save to /etc/NetworkManager/VPN/nm-lagofast-service.name:\n%s\n", serviceFileContent)
 	fmt.Printf("2. Save to /etc/dbus-1/system.d/nm-lagofast-service.conf:\n%s\n", dbusPolicyContent)
 	fmt.Println("Run 'scripts/install-nm-plugin.sh' with pkexec to install automatically.")
+}
+
+func printBrowserProfiles() {
+	profiles := auth.DiscoverProfiles()
+	if len(profiles) == 0 {
+		fmt.Println("No Chromium-based browser profiles found.")
+		return
+	}
+	for _, p := range profiles {
+		state := ""
+		if tok, err := p.ReadLoginCredential(); err != nil {
+			state = "  [cookies unreadable: " + err.Error() + "]"
+		} else if tok != "" {
+			state = "  [has LagoFast login cookie]"
+		}
+		fmt.Printf("  %-22s %s%s\n", p.ID(), p.Label(), state)
+	}
+	fmt.Println("\nOnly used by 'lagofast login --from-browser --browser <id>'.")
+}
+
+// deviceGoogleLogin runs the browser-independent Google sign-in: open (and print) a
+// LagoFast URL bound to a fresh random state, then poll the backend until that
+// state carries a session. No cookies, keyring or local callback server involved.
+func deviceGoogleLogin(client *api.Client, noOpen bool, timeout time.Duration) (*model.UserSession, error) {
+	state, err := api.NewLoginState()
+	if err != nil {
+		return nil, err
+	}
+	loginURL := api.GoogleLoginURL("", state)
+
+	fmt.Println("Sign in to LagoFast with Google by opening this URL in any browser, on any device:")
+	fmt.Printf("\n  %s\n\n", loginURL)
+	if !noOpen && (os.Getenv("DISPLAY") != "" || os.Getenv("WAYLAND_DISPLAY") != "") {
+		if cmd := exec.Command("xdg-open", loginURL); cmd.Start() == nil {
+			go func() { _ = cmd.Wait() }()
+			fmt.Println("(Opened in your default browser.)")
+		} else {
+			fmt.Println("(Could not run xdg-open; open the URL yourself.)")
+		}
+	}
+	fmt.Printf("Waiting up to %s for sign-in to complete. Press Ctrl+C to cancel.\n", timeout)
+
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+	ctx, cancelTimeout := context.WithTimeout(ctx, timeout)
+	defer cancelTimeout()
+
+	sess, err := client.PollGoogleLogin(ctx, state, api.PollOptions{
+		OnPending: func(polls int, transient error) {
+			if transient != nil {
+				fmt.Printf("  still waiting (network problem, retrying: %v)\n", transient)
+			} else if polls%10 == 0 {
+				fmt.Println("  still waiting for sign-in...")
+			}
+		},
+	})
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return nil, fmt.Errorf("timed out after %s waiting for sign-in", timeout)
+	case errors.Is(err, context.Canceled):
+		return nil, errors.New("cancelled")
+	}
+	return sess, err
 }
